@@ -1,0 +1,2 @@
+# Minimal deps for the demos
+# (none required — pure Python stdlib)
