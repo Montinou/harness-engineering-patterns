@@ -1,0 +1,33 @@
+{
+  "id": "research-agent",
+  "version": "1",
+  "name": "Research agent",
+  "domain": "research",
+  "system_prompt": "Answer the research question.",
+  "guardrails": [],
+  "memory_config": {
+    "window": 2,
+    "strategy": "recent"
+  },
+  "tools": [
+    {
+      "name": "calc",
+      "description": "Basic calculator.",
+      "schema": {},
+      "guidance": ""
+    }
+  ],
+  "subagents": [],
+  "skills": [],
+  "scripts": [],
+  "plugins": [],
+  "notes": "Weak seed for the workbench quickstart. An improve run should add verification, planning and a search tool.",
+  "lineage": {
+    "parent_id": null,
+    "parent_version": null,
+    "created_at": "2026-10-21T00:00:00Z",
+    "source": "seed",
+    "metrics": {},
+    "lessons": []
+  }
+}
