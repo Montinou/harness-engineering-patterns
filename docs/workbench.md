@@ -55,7 +55,22 @@ The CLI stays offline. Point `--edits-file` at JSON an external model already wr
 
 ### Executor
 
-`Executor` is a one-method protocol: `execute(harness, task) -> BehavioralReport`. `MockExecutor` is deterministic and ships with the package. A real bot, Quoth-2 policy runner, or MCP loop can replace it without changing the improver. The mock score is behavioral fitness for contrast, not a gold label.
+`Executor` is a one-method protocol: `execute(harness, task) -> BehavioralReport`. `MockExecutor` is deterministic and ships with the package. `--provider anthropic` swaps in a real probe without changing the improver.
+
+### Anthropic
+
+| Role | Model | Id |
+| --- | --- | --- |
+| Solver (main) | Claude Sonnet 5.5 | `claude-sonnet-5-5` |
+| Improver and judge | Claude Haiku 5.5 | `claude-haiku-5-5` |
+
+The client is stdlib `urllib` against `POST /v1/messages` (`x-api-key`, `anthropic-version: 2023-06-01`). It reads `ANTHROPIC_API_KEY`. Thinking blocks are ignored; only text blocks are kept.
+
+Sonnet answers with the harness flattened into the system prompt. Haiku then returns a score and failure codes for that answer. Compose still adopts an edit only when its score beats the base by the margin. Haiku also proposes the edits, unless you pass `--edits-file`.
+
+There is no live tool loop yet. A tool edit changes the guidance Sonnet sees, and the judge can reward or punish the resulting answer. It does not execute `search` or `test_runner` for real.
+
+`--provider mock` remains the default and does not read the key.
 
 Failure codes the mock probe and the rule proposer share:
 

@@ -8,14 +8,23 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
 from harness_workbench import __version__
-from harness_workbench.core.executor import MockExecutor, Task
+from harness_workbench.core.anthropic_backend import (
+    IMPROVER_MODEL,
+    IMPROVER_SYSTEM,
+    SOLVER_MODEL,
+    AnthropicClient,
+    AnthropicError,
+    AnthropicHarnessExecutor,
+)
+from harness_workbench.core.executor import Executor, MockExecutor, Task
 from harness_workbench.core.harness import Harness, load_harness
 from harness_workbench.core.improver import DEFAULT_MARGIN, Improver
-from harness_workbench.core.proposer import FileProposer, ProposerError, RuleBasedProposer
+from harness_workbench.core.proposer import FileProposer, LLMProposer, Proposer, ProposerError, RuleBasedProposer
 from harness_workbench.core.store import known_harness_ids, lineage_chain, load_versions
 
 
@@ -25,7 +34,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return int(args.func(args))
-    except (FileNotFoundError, ValueError, ProposerError, OSError) as exc:
+    except (FileNotFoundError, ValueError, ProposerError, AnthropicError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
@@ -40,24 +49,27 @@ def build_parser() -> argparse.ArgumentParser:
 
     propose = sub.add_parser("propose", help="generate invariant and domain candidate edits")
     _add_task_args(propose)
+    _add_provider_args(propose)
     propose.add_argument("--k", type=int, default=1, help="candidates of each kind (default 1)")
-    propose.add_argument("--edits-file", type=Path, help="JSON edits from an external model, instead of the rule proposer")
+    propose.add_argument("--edits-file", type=Path, help="JSON edits from an external model, instead of the proposer")
     propose.add_argument("--out", type=Path, help="write the candidate JSON here")
     propose.add_argument("--json", action="store_true", help="print machine-readable JSON")
     propose.set_defaults(func=_cmd_propose)
 
-    probe = sub.add_parser("probe", help="execute a harness on a task with the mock executor")
+    probe = sub.add_parser("probe", help="execute a harness on a task")
     _add_task_args(probe)
+    _add_provider_args(probe)
     probe.add_argument("--json", action="store_true")
     probe.set_defaults(func=_cmd_probe)
 
     improve = sub.add_parser("improve", help="run Propose–Probe–Compose and save the result")
     _add_task_args(improve)
+    _add_provider_args(improve)
     improve.add_argument("--k", type=int, default=1)
     improve.add_argument("--mode", choices=("parallel", "sequential"), default="parallel")
     improve.add_argument("--margin", type=float, default=DEFAULT_MARGIN, help="minimum score delta to adopt an edit")
     improve.add_argument("--root", type=Path, default=Path("."), help="where runs/ and library/ are written")
-    improve.add_argument("--edits-file", type=Path, help="JSON edits from an external model, instead of the rule proposer")
+    improve.add_argument("--edits-file", type=Path, help="JSON edits from an external model, instead of the proposer")
     improve.add_argument("--json", action="store_true")
     improve.set_defaults(func=_cmd_improve)
 
@@ -86,17 +98,72 @@ def _task(args: argparse.Namespace) -> Task:
     )
 
 
-def _proposer(args: argparse.Namespace):
-    if getattr(args, "edits_file", None):
-        return FileProposer(args.edits_file.read_text(encoding="utf-8"))
-    return RuleBasedProposer()
+def _add_provider_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--provider",
+        choices=("mock", "anthropic"),
+        default="mock",
+        help="mock is offline; anthropic uses Sonnet to solve and Haiku to improve",
+    )
+    parser.add_argument("--solver-model", default="", help=f"solver model (default {SOLVER_MODEL})")
+    parser.add_argument("--improver-model", default="", help=f"improver and judge model (default {IMPROVER_MODEL})")
+    parser.add_argument("--max-tokens", type=int, default=4096, help="max tokens for the solver answer")
+
+
+def _named_model(flag: str, env_name: str, default: str) -> str:
+    return flag or os.environ.get(env_name, "") or default
+
+
+def _backend(args: argparse.Namespace) -> tuple[Proposer, Executor]:
+    """Return the proposer and executor for this command.
+
+    ``mock`` never touches the network. ``anthropic`` reads ``ANTHROPIC_API_KEY``.
+    """
+    provider = getattr(args, "provider", "mock")
+    edits = getattr(args, "edits_file", None)
+    if provider == "mock":
+        proposer: Proposer
+        if edits:
+            proposer = FileProposer(edits.read_text(encoding="utf-8"))
+        else:
+            proposer = RuleBasedProposer()
+        return proposer, MockExecutor()
+    if provider != "anthropic":
+        raise ValueError(f"unknown provider: {provider}")
+
+    client = AnthropicClient.from_env()
+    solver = _named_model(args.solver_model, "HARNESS_SOLVER_MODEL", SOLVER_MODEL)
+    improver_model = _named_model(args.improver_model, "HARNESS_IMPROVER_MODEL", IMPROVER_MODEL)
+    executor = AnthropicHarnessExecutor(
+        client,
+        solver_model=solver,
+        judge_model=improver_model,
+        max_tokens=args.max_tokens,
+    )
+    if edits:
+        proposer = FileProposer(edits.read_text(encoding="utf-8"))
+    else:
+        def complete(prompt: str) -> str:
+            result = client.complete(
+                model=improver_model,
+                system=IMPROVER_SYSTEM,
+                user=prompt,
+                max_tokens=4096,
+            )
+            return result.text
+
+        proposer = LLMProposer(complete)
+    if not getattr(args, "json", False):
+        print(f"provider anthropic  solver={solver}  improver={improver_model}")
+    return proposer, executor
 
 
 def _cmd_propose(args: argparse.Namespace) -> int:
     harness = load_harness(args.harness)
     task = _task(args)
-    report = MockExecutor().execute(harness, task)
-    candidates = _proposer(args).propose(task, harness, report, k=args.k)
+    proposer, executor = _backend(args)
+    report = executor.execute(harness, task)
+    candidates = proposer.propose(task, harness, report, k=args.k)
     payload = {
         "harness_id": harness.id,
         "version": harness.version,
@@ -124,7 +191,8 @@ def _cmd_propose(args: argparse.Namespace) -> int:
 def _cmd_probe(args: argparse.Namespace) -> int:
     harness = load_harness(args.harness)
     task = _task(args)
-    report = MockExecutor().execute(harness, task)
+    _proposer, executor = _backend(args)
+    report = executor.execute(harness, task)
     if args.json:
         print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
         return 0
@@ -139,7 +207,8 @@ def _cmd_probe(args: argparse.Namespace) -> int:
 def _cmd_improve(args: argparse.Namespace) -> int:
     harness = load_harness(args.harness)
     task = _task(args)
-    improver = Improver(_proposer(args), MockExecutor(), margin=args.margin)
+    proposer, executor = _backend(args)
+    improver = Improver(proposer, executor, margin=args.margin)
     result = improver.improve(harness, task, k=args.k, mode=args.mode, root=args.root)
     if args.json:
         print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))

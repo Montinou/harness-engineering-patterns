@@ -33,6 +33,20 @@ Python package for the self-improvement loop in `research/SELF_IMPROVING_HARNESS
 
 Offline by default: a rule-based proposer and a deterministic mock executor. No API keys and no extra dependencies.
 
+To run it on Anthropic, set a key. Sonnet 5.5 is the frozen solver. Haiku 5.5 proposes edits and judges each probe. A `k=1` improve is about four Sonnet calls and five Haiku calls (base, two candidates, the adopted harness, plus the edit proposal).
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+harness-workbench improve \
+  --provider anthropic \
+  --harness examples/workbench/base_research_harness.json \
+  --task "Fact-check a claim with primary sources and counterevidence" \
+  --domain research \
+  --root .
+```
+
+Override models with `--solver-model` / `--improver-model`, or `HARNESS_SOLVER_MODEL` / `HARNESS_IMPROVER_MODEL`. The defaults are `claude-sonnet-5-5` and `claude-haiku-5-5`. This probe has no live tool runtime: tool guidance is in the prompt, and Haiku scores whether Sonnet followed the harness.
+
 ### Install
 
 ```bash
@@ -90,7 +104,7 @@ The scripts in `examples/` stay standalone sketches. The workbench is the versio
 
 ## Status
 
-Workbench v1 lives in `harness_workbench/`. The pattern notes were bootstrapped from AI Edge Tech adversarial audits (Oct 12–20 2026) plus primary sources.
+Workbench v0.2 lives in `harness_workbench/`. Offline mock loop, plus an Anthropic provider (Sonnet 5.5 solver, Haiku 5.5 improver). The pattern notes were bootstrapped from AI Edge Tech adversarial audits (Oct 12–20 2026) plus primary sources.
 
 ---
 *Private repo. For internal use on agent reliability and Quoth-2 evolution.*
