@@ -1,0 +1,46 @@
+{
+  "name": "offline-command-smoke-test",
+  "baseline": "../workbench/base_research_harness.json",
+  "variants": [
+    {
+      "id": "verification",
+      "harness": "verified_research_harness.json"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "research-smoke",
+      "description": "Return CORRECT and write report.txt as PASS",
+      "domain": "research",
+      "fixture": "fixture",
+      "checks": [
+        {
+          "id": "answer",
+          "type": "exact",
+          "target": "answer",
+          "value": "CORRECT"
+        },
+        {
+          "id": "artifact",
+          "type": "file_equals",
+          "path": "report.txt",
+          "value": "PASS"
+        }
+      ]
+    }
+  ],
+  "repetitions": 5,
+  "seed": 42,
+  "min_samples": 3,
+  "bootstrap_iterations": 300,
+  "executor": {
+    "type": "command",
+    "argv": [
+      "python",
+      "-m",
+      "harness_workbench.experiments.demo_agent"
+    ],
+    "model": "synthetic-fixture-agent",
+    "timeout_seconds": 30
+  }
+}
