@@ -115,6 +115,36 @@ The comparison uses **hierarchical bootstrap** (sample tasks with replacement, t
 
 The static HTML dashboard and JSON evidence include every run, check, failure, output, fixture fingerprint, model/provider and quality/cost/latency Pareto frontier. The Pareto frontier is informational; only eligible variants are recommended. No writes to main and no automatic adoption.
 
+## Optional fail-closed integration with Improve
+
+By default, Improve retains its existing fast behavioral/heuristic selection
+(plus merged-candidate re-probe). For a **real independent acceptance gate**,
+supply --validation-spec when invoking improve:
+
+~~~bash
+harness-workbench improve \
+  --provider mock \
+  --harness examples/workbench/base_research_harness.json \
+  --task "Fact-check a claim" --domain research \
+  --validation-spec examples/experiments/local-command.json \
+  --root .
+~~~
+
+The final composed candidate is then tested against the baseline with fresh
+paired repetitions using the validation manifest's tasks/acceptance checks.
+When the validation manifest specifies a command executor, that executor is
+used for real acceptance trials independently of the proposer/provider.
+Only objectively eligible candidates can be persisted as improved versions.
+A failed check, execution error, missing independent evidence or gate exception
+**rejects** the candidate and keeps the old harness. Each gate call writes its
+separate JSON/HTML evidence to experiments/. Sequential improvement validates
+every adoption step. The sample command executor is synthetic: replace it
+with a real harness-aware adapter before drawing empirical conclusions.
+
+IMPORTANT: Without --validation-spec, the original LLM judge is still only a
+behavioral heuristic and can propose/adopt changes that have not passed a
+held-out task suite.
+
 ## Existing Workbench corrections
 
 1. The Improver now re-probes the merged candidate and **rolls it back** if composition fails the minimum margin, instead of adopting a bad combination of individually positive edits.
