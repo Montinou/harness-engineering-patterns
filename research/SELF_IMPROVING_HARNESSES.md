@@ -1,15 +1,5 @@
 # Self-Improving Harness Patterns — Research Compilation
 
-> **Historical research snapshot (2026-10-21).** The phased build plan and
-> minimum-viable-feature checklist below describe the original proposal, **not**
-> the current implementation status. The workbench is now v0.3; see
-> [current architecture](../docs/workbench.md),
-> [experimentation documentation](../docs/experiments.md), and
-> [verification record](../docs/verification.md).
-> Research citations/results remain attributable to their original sources; they
-> are not benchmark findings measured by this project.
-
-
 **Compiled:** 2026-10-21  
 **Sources:** Primary papers, official repos, AI Edge Tech adversarial audits (Oct 12–20 2026), and related implementations.
 
@@ -230,4 +220,4 @@ AI Edge Tech adversarial briefs (Oct 12–20 2026) in Drive (`AI-Edge-Tech-Pipel
 
 ---
 
-*This document preserves the original research and implementation plan. Follow the linked v0.3 documentation for current implementation behavior.*
+*This document is the reference for building the workbench. Update it as we implement.*

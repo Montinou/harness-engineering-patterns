@@ -6,12 +6,8 @@ These are **educational prototypes**, not production implementations. They illus
 
 ## Requirements
 
-From the **repository root**, these legacy examples use only the Python
-standard library. The included `examples/requirements.txt` is intentionally
-empty of third-party dependencies; installation is optional:
-
 ```bash
-python -m pip install -r examples/requirements.txt
+pip install -r requirements.txt
 ```
 
 ## Run
@@ -24,9 +20,5 @@ python examples/agent_reflex_demo.py
 
 All demos run offline with mock models/solvers so they execute without API keys.
 
-The versioned tool built from these sketches is Harness Workbench v0.3
-(`harness_workbench/`; see [docs/workbench.md](../docs/workbench.md)).
-These older sketches stay small on purpose and do not import that package.
-For the new controlled experiment demonstration, run the command documented
-in [examples/experiments](../docs/experiments.md#quickstart).
+The versioned tool built from these sketches is the Harness Workbench (`harness_workbench/`, see `docs/workbench.md`). These files stay small on purpose and do not import that package.
 

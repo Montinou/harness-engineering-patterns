@@ -1,15 +1,5 @@
 # Changelog
 
-## Unreleased — Documentation consistency (2026-10-22)
-
-- Marked the original v1 build brief and research roadmaps as historical rather
-  than active implementation instructions.
-- Corrected the legacy examples' requirements path and clarified their scope.
-- Updated verification evidence to include successful GitHub Actions runs
-  on Python 3.10, 3.12 and 3.13 (81 tests each, plus offline experiment smoke).
-- Documentation-only changes; no functional or API modifications.
-
-
 ## 0.3.0 — Harness experimentation layer
 
 ### Fixes

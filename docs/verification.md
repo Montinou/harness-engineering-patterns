@@ -52,23 +52,13 @@ its partial evidence remained inspectable, with no final decision or promotion.
 The separate complete run above is the verification result. Automatic resume is
 not implemented or claimed.
 
-## Remote CI verification (2026-10-22)
-
-The workflow [Harness workbench tests](https://github.com/Montinou/harness-engineering-patterns/actions/runs/39724273286)
-completed successfully for source commit
-[`242ac0e4d83e5fa89968826e4fb981909b9ccc75`](https://github.com/Montinou/harness-engineering-patterns/commit/242ac0e4d83e5fa89968826e4fb981909b9ccc75).
-
-All three jobs succeeded: **Python 3.10, 3.12 and 3.13**.
-Each job reported **81 tests passed**, plus successful execution of the
-offline command-adapter experiment smoke test. The CI outcome validates the
-automated tests and synthetic example on those environments; it does **not**
-establish live LLM quality, production-agent isolation or real provider costs.
-
 ## Not verified by this record
 
 - Live Anthropic responses, billing, or comparative model performance.
 - External coding-agent adapters, remote memory isolation or remote side effects.
 - Hostile-code sandboxing: the command runner executes trusted local programs.
+- Remote GitHub Actions outcomes. The workflow defines Python 3.10, 3.12 and 3.13
+  jobs, but local results do not imply those remote jobs have passed.
 - Generalization beyond the declared validation tasks. Reusing a holdout while
   tuning candidates invalidates its independence.
 
