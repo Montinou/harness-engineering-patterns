@@ -166,6 +166,34 @@ class ComposeAndStoreTests(unittest.TestCase):
         self.assertEqual(result.adopted_report.score, 0.4)
         self.assertTrue(any(item.startswith("ROLLBACK") for item in result.lessons))
 
+    def test_independent_gate_can_veto_behavioral_improvement(self) -> None:
+        from harness_workbench.core.executor import MockExecutor
+        harness = Harness(id="sample", version="1", system_prompt="Answer")
+        task = Task.from_text("research question", domain="research")
+        result = Improver(RuleBasedProposer(), MockExecutor(),
+                          promotion_gate=lambda old, new: False).improve(harness, task)
+        self.assertIs(result.adopted, harness)
+        self.assertTrue(any(item.startswith("VALIDATION REJECT") for item in result.lessons))
+
+    def test_improve_cli_can_require_experiment_validation(self) -> None:
+        from harness_workbench.cli import main
+        from contextlib import redirect_stdout
+        from io import StringIO
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as folder:
+            args = [
+                "improve", "--provider", "mock",
+                "--harness", str(root / "examples/workbench/base_research_harness.json"),
+                "--task", "Fact-check a claim using primary sources",
+                "--domain", "research",
+                "--validation-spec", str(root / "examples/experiments/local-command.json"),
+                "--root", folder,
+            ]
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(args), 0)
+            self.assertTrue(list((Path(folder) / "experiments").glob("*/results.json")))
+            self.assertTrue(list((Path(folder) / "library/harnesses/research-agent").glob("2.json")))
+
     def test_same_parent_can_create_two_immutable_children(self) -> None:
         from harness_workbench.core.executor import MockExecutor
         with tempfile.TemporaryDirectory() as folder:
