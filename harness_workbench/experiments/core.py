@@ -83,6 +83,7 @@ class ExperimentSpec:
     bootstrap_iterations: int = 2000
     source: Path | None = None
     source_hash: str = ""
+    executor_config: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def load(cls, path: str | Path) -> "ExperimentSpec":
@@ -153,6 +154,7 @@ class ExperimentSpec:
             max_latency_ratio=float(data.get("max_latency_ratio", 1.5)),
             confidence=confidence, bootstrap_iterations=iterations,
             source=source, source_hash=_digest(source),
+            executor_config=dict(data.get("executor") or {}),
         )
 
 
@@ -200,10 +202,13 @@ def _observed(executor: Any, variant: Variant, case: Case, context: RunContext) 
 
 
 def _one(executor: Any, variant: Variant, case: Case, run_context: RunContext) -> RunRecord:
-    workspace: Path | None = None
+    workspace: Path | None = run_context.workspace
     before: str | None = None
     after: str | None = None
     try:
+        if workspace is not None and case.fixture is None:
+            workspace.mkdir(parents=True, exist_ok=True)
+            before = _digest(workspace)
         if case.fixture:
             if _digest(case.fixture) != case.fixture_hash:
                 raise RuntimeError("source fixture changed during experiment")
@@ -407,6 +412,7 @@ def run_experiment(spec: ExperimentSpec, executor: Any, root: str | Path) -> dic
             "workspace_and_seed_supported": callable(getattr(executor, "execute_case", None)),
             "source": str(spec.source) if spec.source else None,
             "model": str(getattr(executor, "solver_model", "unreported")),
+            "executor_configured": spec.executor_config.get("type", "model"),
         },
         "variants": [{"id": v.id, "harness": str(v.source), "sha256": v.fingerprint,
                       "version": v.harness.version} for v in spec.variants],
