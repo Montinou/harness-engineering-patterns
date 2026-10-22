@@ -180,6 +180,7 @@ class AnthropicHarnessExecutor:
             cost_tokens=solved.tokens + judged.tokens,
             latency_ms=elapsed_ms,
             notes=f"solver={self.solver_model} judge={self.judge_model} stop={solved.stop_reason}",
+            outputs={"answer": solved.text},
         )
 
 
