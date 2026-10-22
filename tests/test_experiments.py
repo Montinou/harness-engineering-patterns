@@ -152,7 +152,16 @@ class ComposeAndStoreTests(unittest.TestCase):
     def test_bad_composition_is_rolled_back(self) -> None:
         harness = Harness(id="sample", version="1", system_prompt="Answer")
         task = Task.from_text("research question", domain="research")
-        result = Improver(RuleBasedProposer(), CombinedFailureExecutor()).improve(harness, task)
+        from harness_workbench.core.proposer import FileProposer
+        edits = {"edits": [
+            {"id": "verify", "kind": "invariant", "component": "guardrails",
+             "op": "add_guardrail", "payload": {"text": "Verify claims"},
+             "rationale": "add verification"},
+            {"id": "search", "kind": "domain", "component": "tools",
+             "op": "add_tool", "payload": {"name": "search", "description": "Search sources"},
+             "rationale": "add retrieval"}
+        ]}
+        result = Improver(FileProposer(json.dumps(edits)), CombinedFailureExecutor()).improve(harness, task)
         self.assertIs(result.adopted, harness)
         self.assertEqual(result.adopted_report.score, 0.4)
         self.assertTrue(any(item.startswith("ROLLBACK") for item in result.lessons))
