@@ -1,5 +1,14 @@
 # BUILD INSTRUCTION — Harness Workbench
 
+> **ARCHIVED IMPLEMENTATION BRIEF — v1 (historical, superseded).**
+> This file records the original work request and acceptance criteria; it is **not**
+> the current project specification or an instruction to rebuild the workbench.
+> The implemented v0.3 documentation lives in [README.md](README.md),
+> [docs/workbench.md](docs/workbench.md), [docs/experiments.md](docs/experiments.md),
+> and [docs/verification.md](docs/verification.md).
+> The requirements below are retained unchanged for traceability.
+
+
 You are building on the private repository:
 **https://github.com/Montinou/harness-engineering-patterns**
 
@@ -94,4 +103,4 @@ After implementation it must be possible to:
 - Update the main README with how to install and run the workbench
 - Add a short `docs/workbench.md` explaining the architecture
 
-Start by reading the research documents, then implement v1 of the workbench.
+*Original instruction (completed/superseded): Start by reading the research documents, then implement v1 of the workbench.*

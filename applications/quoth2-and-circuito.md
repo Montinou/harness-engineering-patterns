@@ -1,5 +1,13 @@
 # Applications to Quoth-2 and Circuito Ontológico
 
+> **Conceptual integration proposals (historical).** The mappings and
+> "next experiments" below are plans for these **separate applications**, not
+> a list of missing features of Harness Workbench v0.3. The applications'
+> current source implementations have not been re-audited here.
+> See [docs/experiments.md](../docs/experiments.md) for the workbench's existing
+> experiment runner and evaluation contracts.
+
+
 ## Quoth-2
 
 The platform already treats orchestration, policies, tool calling and memory as first-class.

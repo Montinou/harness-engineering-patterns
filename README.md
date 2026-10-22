@@ -97,6 +97,15 @@ Local working directories are **not security sandboxes**.
 - [Implementation and verification record](docs/verification.md)
 - [Changelog](CHANGELOG.md)
 
+## Historical planning and research documents
+
+[`BUILD_INSTRUCTION.md`](BUILD_INSTRUCTION.md) is the archived v1
+implementation request, **not** a current task list.
+The pre-v0.3 roadmaps in [research](research/) and conceptual
+[application mappings](applications/quoth2-and-circuito.md) are preserved
+for provenance and now explicitly labeled historical. Current behavior and
+limitations are documented under [Documentation](#documentation).
+
 ## Research and patterns
 
 `docs/`, `patterns/`, `references/`, `research/` and `applications/` retain the
