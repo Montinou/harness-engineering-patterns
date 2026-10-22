@@ -102,6 +102,29 @@ python -m unittest discover -s tests -v
 
 The scripts in `examples/` stay standalone sketches. The workbench is the versioned implementation of the same loop.
 
+
+## Controlled Harness Experiments (feature branch)
+
+The experimental evaluation layer executes *fresh, paired repetitions* of
+multiple harness variants against the same tasks and fixtures. Unlike the
+original behavioral probe, it uses harness-blind acceptance checks for
+objective promotion evidence (answer assertions, files, commands/tests).
+
+- New CLI: harness-workbench experiment --provider command --spec examples/experiments/local-command.json --root .
+- Other backends: --provider anthropic (text-only responses and LLM-judge diagnostics), --provider mock (offline structural simulation).
+- External command agents receive full harness/task JSON and independent fixture workspaces. The adapter is responsible for applying the specified harness.
+- JSON evidence + standalone report.html; paired hierarchical bootstrap,
+  task regressions, budgets and quality/cost/latency Pareto comparisons.
+- The workbench now validates a *composed* harness before adopting it and
+  allocates non-overwriting numbered versions for divergent branches.
+
+**Documentation:** [docs/experiments.md](docs/experiments.md).
+
+This system records seeds and environment fingerprints, but does not guarantee
+LLM determinism or container-level sandboxing. Demo results are synthetic,
+not benchmark claims. There is no Durable Harness dependency or automatic
+merge/promotion.
+
 ## Status
 
 Workbench v0.2 lives in `harness_workbench/`. Offline mock loop, plus an Anthropic provider (Sonnet 5.5 solver, Haiku 5.5 improver). The pattern notes were bootstrapped from AI Edge Tech adversarial audits (Oct 12–20 2026) plus primary sources.
