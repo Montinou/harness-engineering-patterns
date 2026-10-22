@@ -108,7 +108,7 @@ def _task(args: argparse.Namespace) -> Task:
 def _add_provider_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--provider",
-        choices=("mock", "anthropic"),
+        choices=("mock", "anthropic", "command"),
         default="mock",
         help="mock is offline; anthropic uses Sonnet to solve and Haiku to improve",
     )
@@ -244,7 +244,11 @@ def _cmd_experiment(args: argparse.Namespace) -> int:
     from harness_workbench.experiments import ExperimentSpec, run_experiment
 
     spec = ExperimentSpec.load(args.spec)
-    _proposer, executor = _backend(args)
+    if args.provider == "command":
+        from harness_workbench.experiments.command import CommandHarnessExecutor
+        executor = CommandHarnessExecutor.from_config(spec.executor_config)
+    else:
+        _proposer, executor = _backend(args)
     result = run_experiment(spec, executor, args.root)
     if args.json:
         print(json.dumps({
