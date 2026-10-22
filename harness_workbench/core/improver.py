@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from harness_workbench.core.executor import BehavioralReport, Executor, MockExecutor, Task
 from harness_workbench.core.harness import Harness
@@ -121,12 +122,14 @@ class Improver:
         executor: Executor | None = None,
         *,
         margin: float = DEFAULT_MARGIN,
+        promotion_gate: Callable[[Harness, Harness], bool] | None = None,
     ) -> None:
         if margin < 0:
             raise ValueError("margin must be >= 0")
         self.proposer = proposer or RuleBasedProposer()
         self.executor = executor or MockExecutor()
         self.margin = margin
+        self.promotion_gate = promotion_gate
 
     def improve(
         self,
@@ -208,6 +211,16 @@ class Improver:
             )
             adopted = harness
             adopted_report = base_report
+        if adopted is not harness and self.promotion_gate is not None:
+            try:
+                approved = self.promotion_gate(harness, adopted)
+            except Exception as exc:
+                lessons.append(f"VALIDATION ERROR: {type(exc).__name__}: {exc}")
+                approved = False
+            if not approved:
+                lessons.append("VALIDATION REJECT: independently checked candidate did not qualify; base harness kept.")
+                adopted = harness
+                adopted_report = base_report
         if adopted is not harness:
             adopted.lineage.metrics = _metrics(base_report, adopted_report, probed, k=k, mode=mode)
             adopted.lineage.lessons = list(lessons)
