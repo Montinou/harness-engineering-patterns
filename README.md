@@ -111,6 +111,7 @@ original behavioral probe, it uses harness-blind acceptance checks for
 objective promotion evidence (answer assertions, files, commands/tests).
 
 - New CLI: harness-workbench experiment --provider command --spec examples/experiments/local-command.json --root .
+- Optional adoption gate: harness-workbench improve ... --validation-spec examples/experiments/local-command.json (fail-closed objective evaluation before persisting a new harness).
 - Other backends: --provider anthropic (text-only responses and LLM-judge diagnostics), --provider mock (offline structural simulation).
 - External command agents receive full harness/task JSON and independent fixture workspaces. The adapter is responsible for applying the specified harness.
 - JSON evidence + standalone report.html; paired hierarchical bootstrap,
