@@ -1,0 +1,22 @@
+name: Harness Workbench Tests
+on:
+  push:
+    branches: ["feat/**"]
+  pull_request:
+
+jobs:
+  unit-and-experiment:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install workbench
+        run: python -m pip install -e .
+      - name: Run unit and regression tests
+        run: python -m unittest discover -s tests -v
+      - name: End-to-end experiment smoke
+        run: |
+          harness-workbench experiment --provider command --spec examples/experiments/local-command.json --root . --json > /tmp/experiment.json
+          python -c "import json; d=json.load(open('/tmp/experiment.json')); assert d['summary']['recommended'] == ['verification'], d"
