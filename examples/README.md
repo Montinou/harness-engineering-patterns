@@ -6,9 +6,13 @@ These are **educational prototypes**, not production implementations. They illus
 
 ## Requirements
 
-```bash
-pip install -r requirements.txt
-```
+From the **repository root**, the legacy examples have no third-party
+runtime dependencies. The requirements file lives under examples/:
+
+~~~bash
+python -m pip install -r examples/requirements.txt
+~~~
+
 
 ## Run
 
@@ -20,5 +24,9 @@ python examples/agent_reflex_demo.py
 
 All demos run offline with mock models/solvers so they execute without API keys.
 
-The versioned tool built from these sketches is the Harness Workbench (`harness_workbench/`, see `docs/workbench.md`). These files stay small on purpose and do not import that package.
+The versioned tool built from these sketches is Harness Workbench (package
+version 0.2.0) in harness_workbench/; see
+[docs/workbench.md](../docs/workbench.md). These examples remain standalone.
+For the additional controlled-experiment smoke test, see
+[docs/experiments.md](../docs/experiments.md#quickstart).
 

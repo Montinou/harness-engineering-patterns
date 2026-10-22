@@ -1,5 +1,14 @@
 # Deep Research: Self-Improving Harness Patterns (Oct 2026)
 
+> **Historical research snapshot (October 2026).** The MVP suggestions and
+> original next steps here are research context, not an active build request.
+> For implemented behavior on feat/experimental-evaluation-layer consult
+> [README](../README.md), [architecture](../docs/workbench.md),
+> [experiment contract](../docs/experiments.md) and
+> [verification](../docs/verification.md). No live-benchmark results can be
+> inferred from the studies cited below.
+
+
 Compilation of primary sources, methods, results, limitations and implementation details for building a harness generation / modification / measurement / improvement tool.
 
 **Goal**: Provide the maximum actionable detail to move from research to a working Harness Workbench (generate → modify → measure → improve).
@@ -205,4 +214,4 @@ All numbers and method details above are taken from the primary papers and repos
 
 ---
 
-*This document is the research base for building the Harness Workbench. Next step: implement the MVP skeleton in this repo.*
+*Original next step (superseded): implement the MVP skeleton. The feature branch already includes the workbench and an experimental evaluation layer; follow the current docs linked above.*

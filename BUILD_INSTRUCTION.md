@@ -1,5 +1,16 @@
 # BUILD INSTRUCTION — Harness Workbench
 
+> **ARCHIVED v1 IMPLEMENTATION BRIEF (historical).** This file records the
+> original assignment, not unfinished work in the active feature branch.
+> The exploratory workbench and the newer experimental evaluation layer are
+> already implemented on feat/experimental-evaluation-layer. The package
+> version remains 0.2.0. Current behavior and limitations are described in
+> [README.md](README.md), [docs/workbench.md](docs/workbench.md),
+> [docs/experiments.md](docs/experiments.md) and
+> [docs/verification.md](docs/verification.md). Original instructions below
+> remain intact for provenance.
+
+
 You are building on the private repository:
 **https://github.com/Montinou/harness-engineering-patterns**
 

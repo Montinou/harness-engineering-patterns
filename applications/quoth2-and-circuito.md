@@ -1,5 +1,13 @@
 # Applications to Quoth-2 and Circuito Ontológico
 
+> **Separate-application integration ideas.** The proposals below concern
+> Quoth-2, Circuito Ontológico and Panelite; they are not a list of missing
+> experimental workbench features. These applications were not audited while
+> updating the documentation of feat/experimental-evaluation-layer. See
+> [current experiments](../docs/experiments.md) for what this repository
+> actually implements.
+
+
 ## Quoth-2
 
 The platform already treats orchestration, policies, tool calling and memory as first-class.

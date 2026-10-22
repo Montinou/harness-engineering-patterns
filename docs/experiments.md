@@ -1,10 +1,16 @@
 # Harness Experimentation Layer
 
+**Current branch:** feat/experimental-evaluation-layer
+**Package version:** 0.2.0 (experimental branch features; no v0.3 package bump).
+**Verified base commit:** fcb9dec86cdd747df76f1eebd76c31bbef2a3597.
+**Validation record:** [docs/verification.md](verification.md).
+
+
 Branch: feat/experimental-evaluation-layer. Independent of Durable Harness or Vercel.
 
 ## Purpose
 
-Run repeated, paired comparisons of versioned harness configurations using independent acceptance checks. Existing Propose → Probe → Compose → Persist stays intact. The experiment runner **recommends** variants but never writes/promotes a harness automatically.
+Run repeated, paired comparisons of versioned harness configurations using independent acceptance checks. Existing Propose → Probe → Compose → Persist stays intact. The **standalone experiment runner recommends** variants without promoting them. The separate legacy Improve command can persist an adopted version; its optional --validation-spec gate requires independent checks before doing so.
 
 Two scores must not be confused:
 - **Behavioral score:** existing mock heuristic or Anthropic LLM judge; useful as a diagnostic, not proof of task correctness.
@@ -77,7 +83,7 @@ All paths are relative to the manifest. Variant and task IDs must be unique. At 
 
 ## Process adapter contract
 
-A fresh workspace is created for every task × repetition × variant. The command executor places control files *outside* the copied fixture and exposes:
+A fresh **local workspace and run ID** are created for every task × repetition × variant. A fresh external process is launched by the command executor; mock and execute-only adapters may reuse an executor instance, and provider/session resets are adapter responsibilities. The command executor places control files *outside* the copied fixture and exposes:
 
 - HARNESS_SPEC_FILE: full variant harness JSON.
 - HARNESS_TASK_FILE: task JSON.
@@ -107,11 +113,11 @@ A trial receives weighted fraction of passing checks (0 to 1). Records are paire
 
 The comparison uses **hierarchical bootstrap** (sample tasks with replacement, then repetitions inside each task) and stores a confidence interval for paired mean quality delta. A candidate is eligible only if:
 
-1. It has min_samples paired repetitions for **every task**.
+1. It has min_samples paired repetitions for **every task**. Repeated trials of one task are not a substitute for a diverse held-out task set; this version does not enforce development/holdout splits.
 2. Every relevant run has completed independent verification.
 3. Paired mean improvement >= min_improvement and the lower confidence bound is > 0.
 4. No task-level mean regression is less than -max_regression.
-5. Mean token and latency consumption respect specified relative budgets, where baseline measurements exist.
+5. Mean token and latency consumption respect specified relative budgets **only when the baseline denominator is nonzero**. Zero/unknown baseline usage can make token-ratio comparisons inapplicable. This is not a hard monetary cost cap.
 
 The static HTML dashboard and JSON evidence include every run, check, failure, output, fixture fingerprint, model/provider and quality/cost/latency Pareto frontier. The Pareto frontier is informational; only eligible variants are recommended. No writes to main and no automatic adoption.
 
@@ -152,13 +158,15 @@ held-out task suite.
 
 ## Reproducibility and scientific limits
 
-- A new session/process and copied fixture is created for every trial; **do not use durable replay** as a new experimental sample.
+- A new run ID and local fixture workspace are created for every trial. The command adapter starts a new external process; the legacy execute-only interface may reuse client objects or external sessions. **Do not use durable replay** as a new experimental sample.
 - Fixture, harness and manifest SHA-256 fingerprints, environment, model name, IDs and per-run seed are recorded.
 - The command executor consumes the seed, but seed support by the underlying agent is adapter-specific. The legacy Executor interface has no seed/workspace hook. The Anthropic adapter does not guarantee deterministic sampling.
 - Use a separate held-out task/regression suite for final promotion. Candidate development against the same benchmark introduces selection bias and overstates confidence.
 - Keep code revisions, models, dependencies, external resources and tool policies pinned. Uncontrolled network resources can make results incomparable.
 - Full outputs are persisted: avoid including secrets or sensitive personal data in benchmark fixtures.
-- Trials run sequentially in this version. Multi-host transactional persistence, live dashboard and distributed workers are not included; the offline HTML report covers read-only inspection.
+- Trials run sequentially in this version, even when the older Improver is called with mode=parallel (that mode means candidate comparisons against a common base, not simultaneous tasks). Multi-host transactional persistence, live dashboard and distributed workers are not included; the offline HTML report covers read-only inspection.
+- The command executor inherits the calling process's environment by default; its timeout bounds the direct subprocess call, not a guaranteed cleanup of arbitrary spawned descendants. Only run trusted commands and avoid exposing secrets.
+- Experiment JSON/HTML results are persisted only after the suite finishes. A crash during the suite may leave no detailed durable partial report; automatic resume is not implemented.
 - The mock evaluator measures structural fitness, not real task correctness. The Anthropic judge is not an objective oracle.
 - The statistical checks support evidence for these tasks; they do not guarantee behavior on unseen tasks.
 

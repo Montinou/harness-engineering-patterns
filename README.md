@@ -1,5 +1,14 @@
 # Harness Engineering Patterns
 
+> **Current branch: feat/experimental-evaluation-layer (October 22, 2026).**
+> This branch adds experimental evaluation to the existing Workbench **package
+> version 0.2.0**; it does not bump the published package version to 0.3.0.
+> This is a separate implementation from feat/harness-experimentation-layer.
+> See [experiment contracts](docs/experiments.md) and
+> [verification evidence](docs/verification.md). Historical build/research
+> briefs are not active specifications.
+
+
 Private collection of practical patterns and references for **Agent = Model + Harness**.
 
 Focused on improving reliability, adaptability and auditability of agentic systems without retraining the base model.
@@ -33,7 +42,13 @@ Python package for the self-improvement loop in `research/SELF_IMPROVING_HARNESS
 
 Offline by default: a rule-based proposer and a deterministic mock executor. No API keys and no extra dependencies.
 
-To run it on Anthropic, set a key. Sonnet 5.5 is the frozen solver. Haiku 5.5 proposes edits and judges each probe. A `k=1` improve is about four Sonnet calls and five Haiku calls (base, two candidates, the adopted harness, plus the edit proposal).
+To run it on Anthropic, set a key. The default solver identifier is Sonnet 5.5;
+Haiku 5.5 proposes edits and judges each probe. Neither model is trained by
+this workbench, but keeping a provider model alias fixed does not prove its
+weights remain unchanged over time. A typical k=1 improvement with two
+candidates makes about four solver and five improver/judge calls (depending
+on which candidates are generated). Behavioral LLM-judge scores are not
+independent evidence of task correctness.
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
@@ -72,7 +87,7 @@ harness-workbench improve \
 
 That writes:
 
-- `runs/<timestamp>-research-agent-v2/` — task, candidates, probe reports, lessons
+- `runs/<timestamp>-research-agent-v<version>[-suffix]/` — task, candidate probes, reports and lessons
 - `library/harnesses/research-agent/<version>.json` — versions with parent pointers
 - `library/EXPERIENCE.md` — evidence-backed lessons (the improvement library)
 
@@ -117,7 +132,7 @@ objective promotion evidence (answer assertions, files, commands/tests).
 - JSON evidence + standalone report.html; paired hierarchical bootstrap,
   task regressions, budgets and quality/cost/latency Pareto comparisons.
 - The workbench now validates a *composed* harness before adopting it and
-  allocates non-overwriting numbered versions for divergent branches.
+  allocates non-overwriting numbered versions for divergent branches (the shared index and Markdown lessons are not transactional across concurrent writers).
 
 **Documentation:** [docs/experiments.md](docs/experiments.md).
 
@@ -126,9 +141,35 @@ LLM determinism or container-level sandboxing. Demo results are synthetic,
 not benchmark claims. There is no Durable Harness dependency or automatic
 merge/promotion.
 
-## Status
+## Status and boundaries
 
-Workbench v0.2 lives in `harness_workbench/`. Offline mock loop, plus an Anthropic provider (Sonnet 5.5 solver, Haiku 5.5 improver). The pattern notes were bootstrapped from AI Edge Tech adversarial audits (Oct 12–20 2026) plus primary sources.
+This branch retains Workbench **package 0.2.0** and adds an experimental runner,
+an optional independent acceptance gate for Improve, adapter support, statistics
+and HTML/JSON reports. These are feature-branch capabilities, not proof of a
+stable v0.3 release.
+
+The existing Anthropic backend is a text-only solver plus an LLM judge, **not**
+a live tool runtime. The command adapter can launch trusted external processes,
+but the external adapter must apply the harness configuration itself.
+Experiments use new run IDs and copied local fixtures, not guaranteed isolated
+provider sessions for every backend. No container/VM security isolation,
+distributed transaction handling, automatic recovery or production-agent
+benchmark results are claimed. A synthetic smoke test is not empirical evidence
+of real-model performance improvement.
+
+Verification of the previous code commit found **36 tests passed** and a
+successful synthetic command experiment on Python 3.12 in GitHub Actions;
+see [the verification record](docs/verification.md).
+
+## Historical sources
+
+[BUILD_INSTRUCTION.md](BUILD_INSTRUCTION.md) is an archived v1 work request.
+The original [research roadmaps](research/) are dated research snapshots, not
+the current implementation backlog. [Application mappings](applications/quoth2-and-circuito.md)
+describe ideas for other projects, not integrations verified in this branch.
+
+Refer to [docs/workbench.md](docs/workbench.md) and
+[docs/experiments.md](docs/experiments.md) for implemented behavior.
 
 ---
 *Private repo. For internal use on agent reliability and Quoth-2 evolution.*
