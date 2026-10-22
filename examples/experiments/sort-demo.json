@@ -1,0 +1,275 @@
+{
+  "name": "offline-sort-demo",
+  "baseline": {
+    "id": "sort-agent",
+    "version": "1",
+    "system_prompt": "Sort the numbers and return a JSON array.",
+    "lineage": {
+      "created_at": "2026-10-22T00:00:00Z",
+      "source": "seed"
+    }
+  },
+  "variants": [
+    {
+      "label": "numeric",
+      "edits": [
+        {
+          "id": "numeric-order",
+          "kind": "domain",
+          "op": "append_prompt",
+          "payload": {
+            "text": "Use numeric order, not lexicographic order."
+          },
+          "rationale": "Compare numeric values."
+        }
+      ]
+    },
+    {
+      "label": "narrated-verification",
+      "edits": [
+        {
+          "id": "claim-verified",
+          "kind": "invariant",
+          "op": "add_guardrail",
+          "payload": {
+            "text": "Say that the result was verified."
+          },
+          "rationale": "Negative control: a claimed check is not evidence."
+        }
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "task": {
+        "id": "development-0",
+        "description": "Sort the numbers in numbers.json for development case 0.",
+        "domain": "qa"
+      },
+      "split": "development",
+      "fixtures": {
+        "numbers.json": "[2, 10, 1]"
+      },
+      "checks": [
+        {
+          "kind": "json_equals",
+          "expected": [
+            1,
+            2,
+            10
+          ]
+        }
+      ]
+    },
+    {
+      "task": {
+        "id": "development-1",
+        "description": "Sort the numbers in numbers.json for development case 1.",
+        "domain": "qa"
+      },
+      "split": "development",
+      "fixtures": {
+        "numbers.json": "[3, 12, 4]"
+      },
+      "checks": [
+        {
+          "kind": "json_equals",
+          "expected": [
+            3,
+            4,
+            12
+          ]
+        }
+      ]
+    },
+    {
+      "task": {
+        "id": "validation-0",
+        "description": "Sort the numbers in numbers.json for validation case 0.",
+        "domain": "qa"
+      },
+      "split": "validation",
+      "fixtures": {
+        "numbers.json": "[11, 2, 4]"
+      },
+      "checks": [
+        {
+          "kind": "json_equals",
+          "expected": [
+            2,
+            4,
+            11
+          ]
+        }
+      ]
+    },
+    {
+      "task": {
+        "id": "validation-1",
+        "description": "Sort the numbers in numbers.json for validation case 1.",
+        "domain": "qa"
+      },
+      "split": "validation",
+      "fixtures": {
+        "numbers.json": "[9, 10, 3]"
+      },
+      "checks": [
+        {
+          "kind": "json_equals",
+          "expected": [
+            3,
+            9,
+            10
+          ]
+        }
+      ]
+    },
+    {
+      "task": {
+        "id": "validation-2",
+        "description": "Sort the numbers in numbers.json for validation case 2.",
+        "domain": "qa"
+      },
+      "split": "validation",
+      "fixtures": {
+        "numbers.json": "[20, 1, 5]"
+      },
+      "checks": [
+        {
+          "kind": "json_equals",
+          "expected": [
+            1,
+            5,
+            20
+          ]
+        }
+      ]
+    },
+    {
+      "task": {
+        "id": "validation-3",
+        "description": "Sort the numbers in numbers.json for validation case 3.",
+        "domain": "qa"
+      },
+      "split": "validation",
+      "fixtures": {
+        "numbers.json": "[8, 30, 2]"
+      },
+      "checks": [
+        {
+          "kind": "json_equals",
+          "expected": [
+            2,
+            8,
+            30
+          ]
+        }
+      ]
+    },
+    {
+      "task": {
+        "id": "validation-4",
+        "description": "Sort the numbers in numbers.json for validation case 4.",
+        "domain": "qa"
+      },
+      "split": "validation",
+      "fixtures": {
+        "numbers.json": "[7, 40, 6]"
+      },
+      "checks": [
+        {
+          "kind": "json_equals",
+          "expected": [
+            6,
+            7,
+            40
+          ]
+        }
+      ]
+    },
+    {
+      "task": {
+        "id": "validation-5",
+        "description": "Sort the numbers in numbers.json for validation case 5.",
+        "domain": "qa"
+      },
+      "split": "validation",
+      "fixtures": {
+        "numbers.json": "[6, 50, 4]"
+      },
+      "checks": [
+        {
+          "kind": "json_equals",
+          "expected": [
+            4,
+            6,
+            50
+          ]
+        }
+      ]
+    },
+    {
+      "task": {
+        "id": "regression-0",
+        "description": "Sort the numbers in numbers.json for regression case 0.",
+        "domain": "qa"
+      },
+      "split": "regression",
+      "fixtures": {
+        "numbers.json": "[1, 2, 3]"
+      },
+      "checks": [
+        {
+          "kind": "json_equals",
+          "expected": [
+            1,
+            2,
+            3
+          ]
+        }
+      ]
+    },
+    {
+      "task": {
+        "id": "regression-1",
+        "description": "Sort the numbers in numbers.json for regression case 1.",
+        "domain": "qa"
+      },
+      "split": "regression",
+      "fixtures": {
+        "numbers.json": "[-1, 0, 3]"
+      },
+      "checks": [
+        {
+          "kind": "json_equals",
+          "expected": [
+            -1,
+            0,
+            3
+          ]
+        }
+      ]
+    }
+  ],
+  "policy": {
+    "repetitions": 3,
+    "min_validation_tasks": 5,
+    "seed": 1729,
+    "max_workers": 2,
+    "bootstrap_samples": 2000
+  },
+  "backend": {
+    "kind": "command",
+    "command": [
+      "{python}",
+      "{config_dir}/sort_solver.py"
+    ],
+    "files": [
+      "sort_solver.py"
+    ],
+    "timeout": 10
+  },
+  "provenance": {
+    "purpose": "Synthetic smoke test only. Exercises gates; never promotes a production harness."
+  }
+}

@@ -8,6 +8,11 @@ improvement library (``EXPERIENCE.md``).
 from __future__ import annotations
 
 import json
+import os
+import re
+import sqlite3
+from contextlib import contextmanager
+from uuid import uuid4
 from pathlib import Path
 from typing import Any
 
@@ -17,8 +22,12 @@ from harness_workbench.core.harness import Harness, load_harness, save_harness, 
 def persist_result(root: Path, result: Any) -> Path:
     """Write a run directory and update the library. Returns the run path."""
     root.mkdir(parents=True, exist_ok=True)
+    for harness in result.versions:
+        _safe_component(harness.id)
+        _safe_component(harness.version)
+    _safe_component(result.task.domain or "general")
     stamp = utc_now().replace("-", "").replace(":", "")
-    run_id = f"{stamp}-{result.base.id}-v{result.adopted.version}"
+    run_id = f"{stamp}-{result.base.id}-v{result.adopted.version}-{uuid4().hex}"
     run_dir = root / "runs" / run_id
     suffix = 2
     while run_dir.exists():
@@ -48,6 +57,9 @@ def persist_result(root: Path, result: Any) -> Path:
                 "step": index,
                 "base": step.base_report.to_dict(),
                 "adopted": step.adopted_report.to_dict(),
+                "composition": step.composition.to_dict() if step.composition else None,
+                "composition_report": step.composition_report.to_dict() if step.composition_report else None,
+                "total_probe_tokens": step.total_probe_tokens,
                 "candidates": [
                     {"label": candidate.label, "edit_id": candidate.edit.id, "report": report.to_dict()}
                     for candidate, report in step.candidate_reports
@@ -61,20 +73,30 @@ def persist_result(root: Path, result: Any) -> Path:
 
     library = root / "library"
     harness_dir = library / "harnesses" / result.adopted.id
-    for harness in result.versions:
-        destination = harness_dir / f"{harness.version}.json"
-        if destination.exists() and harness.version == result.base.version and harness is result.base:
-            continue
-        save_harness(harness, destination)
-    _append_text(library / "EXPERIENCE.md", lesson_text)
-    domain = result.task.domain or "general"
-    _append_text(library / "lessons" / f"{domain}.md", lesson_text)
-    _update_index(library / "index.json", result.versions)
+    # Serialize writers, then preflight ALL aliases before changing the library.
+    # Run evidence above remains available even when a legacy alias conflicts.
+    with _library_lock(library):
+        for harness in result.versions:
+            destination = harness_dir / f"{harness.version}.json"
+            if destination.exists() and json.loads(destination.read_text(encoding="utf-8")) != harness.to_dict():
+                raise ValueError(
+                    f"Immutable version conflict at {destination}. No library files were overwritten. "
+                    f"Evidence: {run_dir}. Use experiment variants or a distinct version."
+                )
+        for harness in result.versions:
+            destination = harness_dir / f"{harness.version}.json"
+            if not destination.exists():
+                _write_json(destination, harness.to_dict())
+        _append_text(library / "EXPERIENCE.md", lesson_text)
+        domain = result.task.domain or "general"
+        _append_text(library / "lessons" / f"{domain}.md", lesson_text)
+        _update_index(library / "index.json", result.versions)
     return run_dir
 
 
 def load_versions(root: Path, harness_id: str) -> list[Harness]:
     """Load every saved version of ``harness_id``, oldest version key first."""
+    _safe_component(harness_id)
     harness_dir = root / "library" / "harnesses" / harness_id
     if not harness_dir.is_dir():
         return []
@@ -170,7 +192,15 @@ def _version_key(version: str) -> tuple:
 
 def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    temp = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    try:
+        with temp.open("x", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, indent=2, ensure_ascii=False, allow_nan=False) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp, path)
+    finally:
+        temp.unlink(missing_ok=True)
 
 
 def _append_text(path: Path, text: str) -> None:
@@ -184,3 +214,21 @@ def _rel(path: Path, root: Path) -> str:
         return str(path.resolve().relative_to(root.resolve()))
     except ValueError:
         return str(path)
+
+
+def _safe_component(value: str) -> None:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.+\-]{0,127}", value):
+        raise ValueError(f"unsafe library identifier: {value!r}")
+
+
+@contextmanager
+def _library_lock(library: Path):
+    """SQLite supplies a portable, crash-released interprocess writer lock."""
+    library.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(library / ".writer-lock.sqlite3", timeout=30)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        yield
+        connection.commit()
+    finally:
+        connection.close()

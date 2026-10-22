@@ -10,7 +10,7 @@ No model weights are updated. The default proposer and executor are offline.
 
 from __future__ import annotations
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 from harness_workbench.core.executor import BehavioralReport, MockExecutor, Task
 from harness_workbench.core.harness import Harness, load_harness, save_harness

@@ -105,7 +105,7 @@ class ClientTests(unittest.TestCase):
 
 
 class ScriptedClient:
-    """Stands in for AnthropicClient. Solver text is fixed. Judge score follows the harness."""
+    """Stands in for AnthropicClient. Solver text is fixed. The blind judge must not reward an edited harness."""
 
     def complete(self, *, model: str, user: str, system: str = "", max_tokens: int = 4096) -> Completion:
         if model == SOLVER_MODEL:
@@ -130,15 +130,15 @@ class ScriptedClient:
 
 
 class LoopTests(unittest.TestCase):
-    def test_sonnet_solves_and_haiku_judge_feeds_compose(self) -> None:
+    def test_identical_answers_cannot_improve_by_exposing_harness_to_judge(self) -> None:
         client = ScriptedClient()
         executor = AnthropicHarnessExecutor(client, solver_model=SOLVER_MODEL, judge_model=IMPROVER_MODEL)
         proposer = LLMProposer(lambda prompt: client.complete(model=IMPROVER_MODEL, user=prompt, system="edit").text)
         task = Task.from_text("Fact-check a claim", domain="research", task_id="fact")
         result = Improver(proposer, executor).improve(ROOT_HARNESS, task, k=1)
-        self.assertEqual(result.adopted.version, "2")
-        self.assertIn("Verify claims", result.adopted.guardrails[0])
-        self.assertGreater(result.adopted_report.score, result.base_report.score)
+        self.assertEqual(result.adopted.version, "1")
+        self.assertEqual(result.adopted.guardrails, [])
+        self.assertEqual(result.adopted_report.score, result.base_report.score)
         self.assertIn(SOLVER_MODEL, result.adopted_report.notes)
         self.assertIn(IMPROVER_MODEL, result.adopted_report.notes)
         self.assertGreater(result.adopted_report.cost_tokens, 0)

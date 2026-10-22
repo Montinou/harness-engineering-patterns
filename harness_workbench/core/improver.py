@@ -8,7 +8,8 @@ the adopted harness forward. Nothing here trains a model.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from harness_workbench.core.executor import BehavioralReport, Executor, MockExecutor, Task
@@ -29,6 +30,15 @@ class StepRecord:
     adopted: Harness
     adopted_report: BehavioralReport
     lessons: list[str]
+    composition: Harness | None = None
+    composition_report: BehavioralReport | None = None
+
+    @property
+    def total_probe_tokens(self) -> int:
+        reports = [self.base_report, *[report for _, report in self.candidate_reports]]
+        if self.composition_report is not None:
+            reports.append(self.composition_report)
+        return sum(report.cost_tokens for report in reports)
 
 
 @dataclass
@@ -76,12 +86,16 @@ class ImprovementResult:
             },
             "lessons": list(self.lessons),
             "versions": [harness.version for harness in self.versions],
+            "total_probe_tokens": sum(step.total_probe_tokens for step in self.steps),
+            "cost_scope": "executor calls only; proposer usage is not included",
             "steps": [
                 {
                     "base_version": step.base.version,
                     "base_score": step.base_report.score,
                     "adopted_version": step.adopted.version,
                     "adopted_score": step.adopted_report.score,
+                    "composition_report": step.composition_report.to_dict() if step.composition_report else None,
+                    "total_probe_tokens": step.total_probe_tokens,
                     "lessons": list(step.lessons),
                     "probes": [
                         {
@@ -122,8 +136,8 @@ class Improver:
         *,
         margin: float = DEFAULT_MARGIN,
     ) -> None:
-        if margin < 0:
-            raise ValueError("margin must be >= 0")
+        if not math.isfinite(margin) or margin < 0:
+            raise ValueError("margin must be finite and >= 0")
         self.proposer = proposer or RuleBasedProposer()
         self.executor = executor or MockExecutor()
         self.margin = margin
@@ -195,22 +209,44 @@ class Improver:
         )
 
     def _step(self, harness: Harness, task: Task, *, k: int, mode: str) -> StepRecord:
-        base_report = self.executor.execute(harness, task)
-        candidates = self.proposer.propose(task, harness, base_report, k=k)
-        probed = [(candidate, self.executor.execute(candidate.harness, task)) for candidate in candidates]
-        adopted, lessons = self._compose(harness, base_report, probed)
-        adopted_report = base_report if adopted is harness else self.executor.execute(adopted, task)
-        if adopted is not harness:
-            adopted.lineage.metrics = _metrics(base_report, adopted_report, probed, k=k, mode=mode)
-            adopted.lineage.lessons = list(lessons)
+        base_report = self.executor.execute(harness.copy(), task)
+        if not _valid_score(base_report):
+            raise ValueError("baseline returned an invalid score; no comparison is possible")
+        candidates = self.proposer.propose(task, harness.copy(), base_report, k=k)
+        probed = []
+        for candidate in candidates:
+            report = self.executor.execute(candidate.harness.copy(), task)
+            if not _valid_score(report):
+                report = replace(report, score=0.0, failures=[*report.failures, "invalid_score"])
+            probed.append((candidate, report))
+        composed, lessons = self._compose(harness, base_report, probed)
+        composition_report = None
+        adopted, adopted_report = harness, base_report
+        if composed is not harness:
+            composition_report = self.executor.execute(composed.copy(), task)
+            if not _valid_score(composition_report):
+                composition_report = replace(
+                    composition_report, score=0.0,
+                    failures=[*composition_report.failures, "invalid_score"],
+                )
+            delta = round(composition_report.score - base_report.score, 4)
+            if "invalid_score" not in composition_report.failures and delta > self.margin:
+                adopted, adopted_report = composed, composition_report
+                lessons = [line.replace("SELECT ", "ADOPT ", 1) for line in lessons]
+                lessons.append(f"Composition validated: delta {delta:+.3f} > margin {self.margin:.3f}.")
+                adopted.lineage.metrics = _metrics(base_report, adopted_report, probed, k=k, mode=mode)
+                adopted.lineage.lessons = list(lessons)
+            else:
+                lessons = [line.replace("SELECT ", "REJECT ", 1) for line in lessons]
+                lessons.append(
+                    f"REJECT composition: delta {delta:+.3f} did not clear margin "
+                    f"{self.margin:.3f}; base harness kept."
+                )
         return StepRecord(
-            base=harness,
-            base_report=base_report,
-            candidates=candidates,
-            candidate_reports=probed,
-            adopted=adopted,
-            adopted_report=adopted_report,
-            lessons=lessons,
+            base=harness, base_report=base_report, candidates=candidates,
+            candidate_reports=probed, adopted=adopted, adopted_report=adopted_report,
+            lessons=lessons, composition=composed if composed is not harness else None,
+            composition_report=composition_report,
         )
 
     def _compose(
@@ -223,10 +259,10 @@ class Improver:
         lessons: list[str] = []
         for candidate, report in probed:
             delta = round(report.score - base_report.score, 4)
-            if delta > self.margin:
+            if "invalid_score" not in report.failures and delta > self.margin:
                 ranked.append((candidate, report, delta))
                 lessons.append(
-                    "ADOPT "
+                    "SELECT "
                     f"{candidate.edit.kind}/{candidate.edit.component} [{candidate.edit.id}]: "
                     f"{candidate.edit.rationale} "
                     f"(score {base_report.score:.3f} → {report.score:.3f}, delta {delta:+.3f})."
@@ -266,6 +302,9 @@ def _metrics(
         "k": k,
         "mode": mode,
         "cost_tokens": adopted_report.cost_tokens,
+        "total_probe_tokens": base_report.cost_tokens + adopted_report.cost_tokens
+            + sum(report.cost_tokens for _, report in probed),
+        "cost_scope": "executor calls only; proposer usage is not included",
         "probes": [
             {"label": "base", "score": base_report.score, "failures": list(base_report.failures)},
             *[
@@ -274,3 +313,8 @@ def _metrics(
             ],
         ],
     }
+
+
+def _valid_score(report: BehavioralReport) -> bool:
+    return isinstance(report.score, (int, float)) and not isinstance(report.score, bool) \
+        and math.isfinite(report.score) and 0.0 <= report.score <= 1.0

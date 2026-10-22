@@ -1,110 +1,116 @@
 # Harness Engineering Patterns
 
-Private collection of practical patterns and references for **Agent = Model + Harness**.
+Private collection of patterns and a working **Harness Workbench** for
+**Agent = Model + Harness**. Model weights stay frozen; prompts, guardrails,
+memory configuration, tools, subagents, skills, scripts and plugins are versioned.
 
-Focused on improving reliability, adaptability and auditability of agentic systems without retraining the base model.
+## Workbench v0.3: controlled experiments
 
-## Core idea
+Two complementary loops are available:
 
-The model reasons. The **harness** is everything else: tools, context assembly, state/memory, routing, guardrails, verification loops, orchestration and the executable programs that organize model calls.
+- `harness-workbench`: Propose → Probe → Compose → Persist, for exploratory
+  single-task changes. A composition must pass its own probe before adoption.
+- `harness-experiments`: freeze inputs → repeated independent trials → select on
+  development → validate one finalist on held-out tasks → regression/cost gates
+  → immutable promotion. Objective acceptance tests, not harness adherence,
+  decide whether a candidate wins.
 
-Changing the harness alone can move performance by tens of points. Recent work (late 2026) shows how to *learn* and *recursively improve* harnesses.
+No Durable Harness dependency, hosted service, database server, or new Python
+package dependency is required. Python 3.10+ and the standard library are enough.
 
-## Contents
-
-- `docs/` — Pattern write-ups and references
-- `patterns/` — Concrete pattern descriptions + pseudocode sketches
-- `references/` — Key papers and repos (as of Oct 2026)
-- `applications/` — Mapping to Quoth-2, Circuito Ontológico, Panelite, etc.
-
-## Key papers (Oct 2026)
-
-| Pattern | Paper | Code |
-|---------|-------|------|
-| Harness Learning | arXiv:2609.35738 | (paper) |
-| Harness² | arXiv:2610.14224 | github.com/google-research/harness2 |
-| Agent-Reflex | arXiv:2610.17953 | github.com/RUC-NLPIR/Agent-Reflex |
-
-## Harness Workbench
-
-Python package for the self-improvement loop in `research/SELF_IMPROVING_HARNESSES.md`:
-
-**Propose → Probe → Compose → Persist**
-
-Offline by default: a rule-based proposer and a deterministic mock executor. No API keys and no extra dependencies.
-
-To run it on Anthropic, set a key. Sonnet 5.5 is the frozen solver. Haiku 5.5 proposes edits and judges each probe. A `k=1` improve is about four Sonnet calls and five Haiku calls (base, two candidates, the adopted harness, plus the edit proposal).
-
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-harness-workbench improve \
-  --provider anthropic \
-  --harness examples/workbench/base_research_harness.json \
-  --task "Fact-check a claim with primary sources and counterevidence" \
-  --domain research \
-  --root .
-```
-
-Override models with `--solver-model` / `--improver-model`, or `HARNESS_SOLVER_MODEL` / `HARNESS_IMPROVER_MODEL`. The defaults are `claude-sonnet-5-5` and `claude-haiku-5-5`. This probe has no live tool runtime: tool guidance is in the prompt, and Haiku scores whether Sonnet followed the harness.
-
-### Install
+### Install and test
 
 ```bash
 python -m pip install -e .
-harness-workbench --help
+python -m unittest discover -s tests -v
 ```
 
-From a checkout, without installing:
+Without installing, use `python -m harness_workbench` and
+`python -m harness_workbench.experiments` from the repository root.
+
+### Run the complete offline experiment demo
 
 ```bash
-PYTHONPATH=. python -m harness_workbench --help
+python -m harness_workbench.experiments run \
+  --config examples/experiments/sort-demo.json \
+  --root .harness-experiments \
+  --allow-commands
 ```
 
-### Improve a harness
+This runs a controlled sorting program, with a numeric-sort candidate and a
+negative control that merely claims verification. It uses no API keys and makes
+no model calls. It is explicitly **synthetic**: even if its statistical gates
+pass, it cannot promote a production harness. The CLI writes JSON, Markdown and
+a standalone HTML report, and prints the experiment ID.
+
+### Inspect results and export accepted harnesses
+
+```bash
+harness-experiments list --root .harness-experiments
+harness-experiments report --root .harness-experiments --experiment-id EXPERIMENT_ID
+harness-experiments export --root .harness-experiments \
+  --experiment-id EXPERIMENT_ID --out accepted-harness.json
+```
+
+Export requires an actually accepted experiment and refuses to overwrite a file.
+An experiment never edits the source harness or a production configuration.
+
+### Generate hypotheses from development tasks
+
+```bash
+harness-experiments propose \
+  --config examples/experiments/sort-demo.json \
+  --k 1 --out proposed-experiment.json
+```
+
+This uses the existing rule-based proposer and returns a self-contained config.
+The Python API also accepts `LLMProposer` and externally generated edits. Neither
+reference answers nor validation/regression cases are passed to the proposer.
+Generation is a hypothesis-building step, not proof of improvement.
+
+### Keep using the exploratory loop
 
 ```bash
 harness-workbench improve \
   --harness examples/workbench/base_research_harness.json \
   --task "Fact-check a claim with primary sources and counterevidence" \
-  --domain research \
-  --root .
+  --domain research --root .
 ```
 
-That writes:
+The mock executor is deterministic and offline. `--provider anthropic` uses the
+existing Messages API backend; configure `ANTHROPIC_API_KEY` and override model
+IDs with `--solver-model` / `--improver-model` as needed. Its judge now sees only
+the task, constraints and full answer, **not the candidate harness**. This is
+still a model judgment, not an objective correctness oracle.
 
-- `runs/<timestamp>-research-agent-v2/` — task, candidates, probe reports, lessons
-- `library/harnesses/research-agent/<version>.json` — versions with parent pointers
-- `library/EXPERIENCE.md` — evidence-backed lessons (the improvement library)
+The Anthropic backend remains a **single-turn text probe**, not a live tool loop.
+For real agent tools/workspaces, implement the experiment command protocol or
+inject a Python trial executor. Explicit `--allow-network` is required for
+Anthropic experiments; `--allow-commands` is required for local commands.
+Local working directories are **not security sandboxes**.
 
-### Other commands
+## Documentation
 
-```bash
-harness-workbench propose \
-  --harness examples/workbench/base_research_harness.json \
-  --task "Fact-check a claim" --domain research
+- [Workbench architecture and migration](docs/workbench.md)
+- [Experiment configuration, adapters, metrics and limitations](docs/experiments.md)
+- [Architecture decision: experimentation layer](docs/adr/0001-experimentation-layer.md)
+- [Implementation and verification record](docs/verification.md)
+- [Changelog](CHANGELOG.md)
 
-harness-workbench probe \
-  --harness examples/workbench/base_research_harness.json \
-  --task "Fact-check a claim" --domain research
+## Research and patterns
 
-harness-workbench report --harness-id research-agent
-```
+`docs/`, `patterns/`, `references/`, `research/` and `applications/` retain the
+research notes, pattern sketches and mappings to Quoth-2 and Circuito Ontológico.
+`examples/` retains the original standalone demonstrations. Research claims in
+those notes are not benchmark results produced by this workbench.
 
-`--edits-file edits.json` feeds structured edits from an external model into `propose` or `improve`. In Python, pass a completer to `LLMProposer` or any `execute()` implementation to `Improver`.
+| Pattern | Existing research reference |
+|---|---|
+| Harness Learning | `patterns/harness-learning.md` |
+| Harness² | `patterns/harness2.md` |
+| Agent-Reflex | `patterns/agent-reflex.md` |
 
-Architecture: [docs/workbench.md](docs/workbench.md).
+See `research/SELF_IMPROVING_HARNESSES.md` for the original design motivation.
 
-### Tests
-
-```bash
-python -m unittest discover -s tests -v
-```
-
-The scripts in `examples/` stay standalone sketches. The workbench is the versioned implementation of the same loop.
-
-## Status
-
-Workbench v0.2 lives in `harness_workbench/`. Offline mock loop, plus an Anthropic provider (Sonnet 5.5 solver, Haiku 5.5 improver). The pattern notes were bootstrapped from AI Edge Tech adversarial audits (Oct 12–20 2026) plus primary sources.
-
----
-*Private repo. For internal use on agent reliability and Quoth-2 evolution.*
+*Private repository. No production harness, model subscription or main-branch
+configuration is changed by running an experiment.*

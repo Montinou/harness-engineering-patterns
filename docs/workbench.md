@@ -1,113 +1,96 @@
-# Harness Workbench
+# Harness Workbench architecture — v0.3
 
-The workbench generates, probes, composes and stores agent harnesses. Model weights stay frozen. The loop is the one in [research/SELF_IMPROVING_HARNESSES.md](../research/SELF_IMPROVING_HARNESSES.md):
+The Python core remains provider-independent and standard-library only.
+Existing imports and `propose`, `probe`, `improve`, `report` commands are retained.
+The new `harness-experiments` CLI is an additional entry point, not a replacement.
 
-**Propose → Probe → Compose → Persist**
-
-It is a small offline implementation of three patterns:
-
-| Pattern | What v1 uses |
-| --- | --- |
-| Harness Learning | A proposer turns an execution report into a structured edit or a textual diff. |
-| Harness² | Propose–Probe–Compose at `k=1`, plus a persistent improvement library. `k>1` and sequential mode are supported. |
-| Agent-Reflex | Noisy tool feedback proposes a reflection skill and a reflection plugin. |
-
-The sketches in `examples/` stay as readable demos. This package is the versioned tool.
-
-## Architecture
+## Layers
 
 ```text
-Task + Harness
-      │
-      ▼
- Proposer ── invariant edits + domain edits (structured ops + diff)
-      │
-      ▼
- Executor ── behavioral report (score, trace, failures, cost)
-      │
-      ▼
- Composer ── keep edits that beat the base by a margin
-      │
-      ▼
- Library   runs/<id>/   evidence for this call
-           library/     versioned harnesses + EXPERIENCE.md
+Structured Harness + Task
+        |
+        +-- exploratory Proposer / Improver
+        |      propose -> probe candidates -> compose -> probe composition
+        |      -> keep only a validated composition -> persist evidence
+        |
+        +-- ExperimentSpec
+               freeze harnesses, task splits, fixtures, checks and policy
+               -> independent repeated trials
+               -> objective evaluator, separate diagnostic report
+               -> choose one development finalist
+               -> held-out validation and regression tests
+               -> accepted immutable harness object OR keep baseline
 ```
 
-### Harness
+## Core model
 
-`harness_workbench/core/harness.py` holds the eight editable components: system prompt, guardrails, memory, tools, subagents, skills, scripts, plugins. `id` is stable. `version` changes only when a composed harness is adopted. `lineage` stores the parent version, metrics and the lessons for that step.
+`core/harness.py` defines the eight editable components and parent lineage.
+`core/proposer.py` retains structured edits (`append_prompt`, `add_guardrail`,
+`set_memory`, `add_tool`, `add_subagent`, `add_skill`, `add_script`, `add_plugin`,
+`bundle`) and the rule, file and LLM proposer implementations.
 
-Candidate edits use a provisional version such as `1+inv-verify-plan`. Those are not written to the library. Adopted versions are `1`, `2`, `3`, …
+`Executor.execute(harness, task) -> BehavioralReport` remains compatible.
+`BehavioralReport` adds `output` (full observable answer) and `metadata` with safe
+defaults. Existing backends that do not return output still work for exploratory
+probes, but cannot establish objective answer quality in experiments.
 
-### Proposer
+## Corrected composition
 
-`RuleBasedProposer` reads the failure codes below and emits up to `k` invariant edits and `k` domain edits. It does not call a model.
+Previously, individually successful changes were merged and kept even when the
+combined harness performed worse. The composed harness is now executed and must
+independently beat the baseline by the configured margin. Otherwise, the exact
+base object is retained; proposed composition, report and rejection reasons are
+still persisted. `SELECT` lessons become `ADOPT` only after that final check.
+NaN/invalid scores cannot authorize adoption.
 
-`LLMProposer` takes a completer `(prompt: str) -> str`. The completer must return JSON:
+`StepRecord.total_probe_tokens` includes baseline, every candidate and the
+composition, including rejected probes. The scope is explicit: legacy proposer
+usage is not included because the existing completer protocol returns only text.
 
-```json
-{"edits":[{"id":"llm-1","kind":"invariant","component":"guardrails","op":"add_guardrail","payload":{"text":"..."},"rationale":"..."}]}
-```
+The legacy `parallel` mode means independent candidate comparisons against one
+base; it does not suddenly make those old calls concurrent. Actual bounded
+concurrency is provided by the new experiment runner's `max_workers` setting.
 
-Ops: `append_prompt`, `add_guardrail`, `set_memory`, `add_tool`, `add_subagent`, `add_skill`, `add_script`, `add_plugin`, `bundle`.
+## Independent evaluation
 
-The CLI stays offline. Point `--edits-file` at JSON an external model already wrote; that path uses the same parser as `LLMProposer`.
+The Anthropic judge is blind to the candidate system prompt/guardrails. It gets
+the task, constraints and complete answer. Identical answers under different
+harnesses therefore produce identical judge inputs. Its assessment is labeled
+`blind_task_judge_not_objective`; it is not presented as external verification.
 
-### Executor
+The experiment layer computes its own score from frozen acceptance checks over
+outputs/artifacts. The backend diagnostic score remains in evidence but is not
+used for selection or promotion. Hidden command checks run after the solver, in
+a different temporary working directory. This is interface separation, not a
+security boundary against malicious code running as the same OS user.
 
-`Executor` is a one-method protocol: `execute(harness, task) -> BehavioralReport`. `MockExecutor` is deterministic and ships with the package. `--provider anthropic` swaps in a real probe without changing the improver.
+## Persistence and compatibility
 
-### Anthropic
+Legacy `runs/` now uses UUID-suffixed IDs. The library writer uses a portable
+SQLite writer lock and atomic file replacement for derived views. Existing
+numeric version aliases are immutable: a conflicting `2.json` is rejected,
+not overwritten. The attempted run's evidence remains available. Continue from
+the adopted version, supply a distinct version, or use experiment variants for
+branches. Existing libraries are not migrated or deleted automatically.
 
-| Role | Model | Id |
-| --- | --- | --- |
-| Solver (main) | Claude Sonnet 5.5 | `claude-sonnet-5-5` |
-| Improver and judge | Claude Haiku 5.5 | `claude-haiku-5-5` |
+The experiment registry is separate: `.harness-experiments/experiments.sqlite3`.
+Manifests, trials, evaluations and decisions are append-only through its API.
+Variant IDs include a content hash; experiment/run/evaluation IDs are unique.
+Accepted harnesses are content-addressed and carry an experiment-specific version
+and parent references. Decisions and accepted artifacts are committed in one
+SQLite transaction. JSON/Markdown/HTML reports are regenerable derived views.
 
-The client is stdlib `urllib` against `POST /v1/messages` (`x-api-key`, `anthropic-version: 2023-06-01`). It reads `ANTHROPIC_API_KEY`. Thinking blocks are ignored; only text blocks are kept.
+## Extension points
 
-Sonnet answers with the harness flattened into the system prompt. Haiku then returns a score and failure codes for that answer. Compose still adopts an edit only when its score beats the base by the margin. Haiku also proposes the edits, unless you pass `--edits-file`.
+`ExperimentRunner(..., executor=callable)` accepts a trial executor with
+`(Harness, Task, Context) -> BehavioralReport`. Context supplies an isolated
+working directory, run ID, repetition and paired seed. Built-in backends create
+a fresh executor per trial; custom adapters must reset their external memory,
+services, tools and sessions themselves and enforce their own deadlines.
 
-There is no live tool loop yet. A tool edit changes the guidance Sonnet sees, and the judge can reward or punish the resulting answer. It does not execute `search` or `test_runner` for real.
+`propose_development()` connects an existing proposer to development tasks only.
+Individual proposals and their composition become independent hypotheses, each
+subject to exactly the same experiment gates. It never forwards held-out cases
+or acceptance answers to the proposer.
 
-`--provider mock` remains the default and does not read the key.
-
-Failure codes the mock probe and the rule proposer share:
-
-| Code | Meaning |
-| --- | --- |
-| `missing_verification` | No verify / cite / counterevidence language |
-| `missing_plan` | System prompt does not ask for a step-by-step plan |
-| `thin_memory` | Memory window under 4 |
-| `missing_domain_tool:<name>` | Domain tool is absent (`search`, `repo_search`, `test_runner`) |
-| `tool_noise_unhandled` | Task mentions noise and no reflection skill or plugin is armed |
-| `no_reviewer` | Task asks for review or audit and no reviewer subagent exists |
-
-### Compose
-
-An edit is adopted only when its probe score beats the base by the margin (default `0.05`). Winners are applied together onto a new version. Losers are recorded as `SKIP` lessons. If nothing clears the margin, the base version is kept.
-
-- `parallel` (default): one step, `k` invariant + `k` domain candidates, all probed against the same base.
-- `sequential`: up to `k` steps of `k=1`, each starting from the harness the previous step adopted.
-
-### Library
-
-`improve --root .` writes:
-
-- `runs/<timestamp>-<id>-v<version>/` — task, candidates, reports, lessons
-- `library/harnesses/<id>/<version>.json` — the harness, including parent and metrics
-- `library/EXPERIENCE.md` — lessons appended across tasks
-- `library/lessons/<domain>.md` — the same block, split by domain
-- `library/index.json` — version index
-
-`report` walks `parent_version` from the newest file back to the seed.
-
-Re-running `improve` on the same parent version overwrites that next version in the library. Continue from the adopted file when you want a longer chain.
-
-## Extend
-
-- Custom executor: pass any object with `execute(harness, task)` into `Improver`.
-- Custom proposer: pass any object with `propose(task, harness, report, k=...)`.
-- Trained proposer (Harness Learning, later): keep this edit language and swap the completer. v1 does not train.
-
-Quoth-2 policies and Circuito's Evidence precheck map onto the same eight components. See [applications/quoth2-and-circuito.md](../applications/quoth2-and-circuito.md).
+See [experiments.md](experiments.md) for the complete execution contract.

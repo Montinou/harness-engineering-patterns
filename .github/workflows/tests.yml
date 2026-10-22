@@ -1,0 +1,21 @@
+name: Harness workbench tests
+on:
+  push:
+    branches: ["feat/harness-experimentation-layer"]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.10", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install -e .
+      - run: python -m unittest discover -s tests -v
+      - run: python -m harness_workbench.experiments run --config examples/experiments/sort-demo.json --root /tmp/harness-smoke --allow-commands

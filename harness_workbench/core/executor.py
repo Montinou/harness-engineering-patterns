@@ -96,6 +96,9 @@ class BehavioralReport:
     cost_tokens: int = 0
     latency_ms: int = 0
     notes: str = ""
+    # The complete observable output, separate from the backend's diagnostic score.
+    output: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
