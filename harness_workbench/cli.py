@@ -73,6 +73,13 @@ def build_parser() -> argparse.ArgumentParser:
     improve.add_argument("--json", action="store_true")
     improve.set_defaults(func=_cmd_improve)
 
+    experiment = sub.add_parser("experiment", help="run matched, repeated harness comparisons with acceptance checks")
+    experiment.add_argument("--spec", type=Path, required=True, help="experiment manifest JSON")
+    experiment.add_argument("--root", type=Path, default=Path("."), help="where experiments/ is written")
+    _add_provider_args(experiment)
+    experiment.add_argument("--json", action="store_true")
+    experiment.set_defaults(func=_cmd_experiment)
+
     report = sub.add_parser("report", help="show saved lineage, metrics and lessons")
     report.add_argument("--root", type=Path, default=Path("."))
     report.add_argument("--harness-id", help="harness id to inspect; omit to list saved harnesses")
@@ -230,6 +237,33 @@ def _cmd_improve(args: argparse.Namespace) -> int:
         print(f"  - {lesson}")
     if result.run_dir is not None:
         print(f"saved {result.run_dir}")
+    return 0
+
+
+def _cmd_experiment(args: argparse.Namespace) -> int:
+    from harness_workbench.experiments import ExperimentSpec, run_experiment
+
+    spec = ExperimentSpec.load(args.spec)
+    _proposer, executor = _backend(args)
+    result = run_experiment(spec, executor, args.root)
+    if args.json:
+        print(json.dumps({
+            "experiment_id": result["experiment_id"],
+            "summary": result["summary"],
+            "report_path": result["report_path"],
+            "results_path": result["results_path"],
+        }, indent=2))
+    else:
+        print(f"experiment {result['experiment_id']}  {spec.name}")
+        for name, stats in result["summary"]["variants"].items():
+            verdict = result["summary"]["contrasts"].get(name)
+            status = "BASE" if verdict is None else ("ELIGIBLE" if verdict["eligible"] else "REJECTED")
+            print(f"  {name:20} {status:9} quality={stats['mean_score']:.3f} "
+                  f"pass={stats['pass_rate']:.0%} tokens={stats['mean_tokens']:.0f}")
+            if verdict and verdict["reasons"]:
+                print("    " + "; ".join(verdict["reasons"]))
+        print(f"report {result['report_path']}")
+        print(f"data   {result['results_path']}")
     return 0
 
 
