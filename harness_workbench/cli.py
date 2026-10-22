@@ -70,6 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
     improve.add_argument("--margin", type=float, default=DEFAULT_MARGIN, help="minimum score delta to adopt an edit")
     improve.add_argument("--root", type=Path, default=Path("."), help="where runs/ and library/ are written")
     improve.add_argument("--edits-file", type=Path, help="JSON edits from an external model, instead of the proposer")
+    improve.add_argument("--validation-spec", type=Path, help="require independent repeated acceptance checks before adoption")
     improve.add_argument("--json", action="store_true")
     improve.set_defaults(func=_cmd_improve)
 
@@ -215,10 +216,40 @@ def _cmd_improve(args: argparse.Namespace) -> int:
     harness = load_harness(args.harness)
     task = _task(args)
     proposer, executor = _backend(args)
-    improver = Improver(proposer, executor, margin=args.margin)
+    gate = None
+    validation_evidence = []
+    if args.validation_spec:
+        import hashlib
+        from dataclasses import replace
+        from harness_workbench.experiments import ExperimentSpec, run_experiment
+        from harness_workbench.experiments.core import Variant
+
+        validation_spec = ExperimentSpec.load(args.validation_spec)
+        if validation_spec.executor_config.get("type") == "command":
+            from harness_workbench.experiments.command import CommandHarnessExecutor
+            validation_executor = CommandHarnessExecutor.from_config(validation_spec.executor_config)
+        else:
+            validation_executor = executor
+
+        def gate(before: Harness, candidate: Harness) -> bool:
+            def variant(identity: str, value: Harness) -> Variant:
+                fingerprint = hashlib.sha256(value.to_json().encode("utf-8")).hexdigest()
+                return Variant(identity, value, Path("(dynamically-composed)"), fingerprint)
+
+            controlled = replace(validation_spec, variants=(
+                variant("baseline", before), variant("candidate", candidate),
+            ))
+            evidence = run_experiment(controlled, validation_executor, args.root)
+            validation_evidence.append({
+                "report": evidence["report_path"], "results": evidence["results_path"],
+                "decision": evidence["summary"]["contrasts"]["candidate"],
+            })
+            return bool(evidence["summary"]["contrasts"]["candidate"]["eligible"])
+
+    improver = Improver(proposer, executor, margin=args.margin, promotion_gate=gate)
     result = improver.improve(harness, task, k=args.k, mode=args.mode, root=args.root)
     if args.json:
-        print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
+        print(json.dumps(result.to_dict() | {"validation_evidence": validation_evidence}, indent=2, ensure_ascii=False))
         return 0
     for index, step in enumerate(result.steps, start=1):
         print(
@@ -237,6 +268,8 @@ def _cmd_improve(args: argparse.Namespace) -> int:
         print(f"  - {lesson}")
     if result.run_dir is not None:
         print(f"saved {result.run_dir}")
+    for evidence in validation_evidence:
+        print(f"validation {evidence['report']}  eligible={evidence['decision']['eligible']}")
     return 0
 
 
