@@ -96,6 +96,7 @@ class BehavioralReport:
     cost_tokens: int = 0
     latency_ms: int = 0
     notes: str = ""
+    outputs: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
