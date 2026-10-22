@@ -17,6 +17,7 @@ from harness_workbench.core.harness import Harness, load_harness, save_harness, 
 def persist_result(root: Path, result: Any) -> Path:
     """Write a run directory and update the library. Returns the run path."""
     root.mkdir(parents=True, exist_ok=True)
+    _persist_unique_versions(root, result)
     stamp = utc_now().replace("-", "").replace(":", "")
     run_id = f"{stamp}-{result.base.id}-v{result.adopted.version}"
     run_dir = root / "runs" / run_id
@@ -60,17 +61,52 @@ def persist_result(root: Path, result: Any) -> Path:
     (run_dir / "lessons.md").write_text(lesson_text, encoding="utf-8")
 
     library = root / "library"
-    harness_dir = library / "harnesses" / result.adopted.id
-    for harness in result.versions:
-        destination = harness_dir / f"{harness.version}.json"
-        if destination.exists() and harness.version == result.base.version and harness is result.base:
-            continue
-        save_harness(harness, destination)
+    # Immutable version files were allocated before writing the run evidence.
     _append_text(library / "EXPERIENCE.md", lesson_text)
     domain = result.task.domain or "general"
     _append_text(library / "lessons" / f"{domain}.md", lesson_text)
     _update_index(library / "index.json", result.versions)
     return run_dir
+
+
+
+def _persist_unique_versions(root: Path, result: Any) -> None:
+    """Allocate immutable version files, preserving parent pointers.
+
+    Concurrent creators cannot overwrite a version because 'x' is exclusive.
+    The Markdown summary/index are best-effort single-writer metadata; a
+    database/transactional store is needed for multi-host coordination.
+    """
+    root_dir = root / "library" / "harnesses" / result.base.id
+    root_dir.mkdir(parents=True, exist_ok=True)
+    version_map: dict[str, str] = {}
+    for index, harness in enumerate(result.versions):
+        original = harness.version
+        if harness.lineage.parent_version in version_map:
+            harness.lineage.parent_version = version_map[harness.lineage.parent_version]
+        candidate = original
+        if index == 0:
+            existing = root_dir / f"{candidate}.json"
+            if existing.exists():
+                # An already-known parent is never replaced.
+                continue
+        while True:
+            filename = root_dir / f"{candidate}.json"
+            if filename.exists():
+                candidate = _next_available_version(root_dir)
+            harness.version = candidate
+            try:
+                with filename.open("x", encoding="utf-8") as handle:
+                    handle.write(harness.to_json())
+                break
+            except FileExistsError:
+                candidate = _next_available_version(root_dir)
+        version_map[original] = candidate
+
+
+def _next_available_version(directory: Path) -> str:
+    numbers = [int(p.stem) for p in directory.glob("*.json") if p.stem.isdecimal()]
+    return str(max(numbers, default=0) + 1)
 
 
 def load_versions(root: Path, harness_id: str) -> list[Harness]:
