@@ -102,6 +102,11 @@ def _persist_unique_versions(root: Path, result: Any) -> None:
             except FileExistsError:
                 candidate = _next_available_version(root_dir)
         version_map[original] = candidate
+    # Report metadata must describe the committed version IDs, not the
+    # provisional IDs assigned before a concurrent branch collision.
+    for step in result.steps:
+        step.base_report.harness_version = step.base.version
+        step.adopted_report.harness_version = step.adopted.version
 
 
 def _next_available_version(directory: Path) -> str:
