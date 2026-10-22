@@ -200,6 +200,14 @@ class Improver:
         probed = [(candidate, self.executor.execute(candidate.harness, task)) for candidate in candidates]
         adopted, lessons = self._compose(harness, base_report, probed)
         adopted_report = base_report if adopted is harness else self.executor.execute(adopted, task)
+        if adopted is not harness and adopted_report.score - base_report.score <= self.margin:
+            lessons.append(
+                "ROLLBACK composed harness: independently re-probed composition did not "
+                f"beat base by margin {self.margin:.3f} "
+                f"(base={base_report.score:.3f}, composed={adopted_report.score:.3f})."
+            )
+            adopted = harness
+            adopted_report = base_report
         if adopted is not harness:
             adopted.lineage.metrics = _metrics(base_report, adopted_report, probed, k=k, mode=mode)
             adopted.lineage.lessons = list(lessons)
