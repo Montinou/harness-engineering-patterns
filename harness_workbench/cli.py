@@ -1,6 +1,6 @@
 """Command line for the Harness Workbench.
 
-Commands: propose, probe, improve, experiment, migrate-manifest, export-library, report.
+Commands: propose, probe, improve, experiment, migrate-manifest, export-library, migrate-library, report.
 The default path is offline (rule proposer, mock executor).
 """
 
@@ -103,6 +103,14 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("--root", type=Path, default=Path("."), help="where library/ lives")
     export.add_argument("--json", action="store_true", help="print the regenerated paths as a JSON list")
     export.set_defaults(func=_cmd_export_library)
+
+    migrate_lib = sub.add_parser(
+        "migrate-library", help="import legacy library JSON versions into the database (idempotent, backs up first)"
+    )
+    migrate_lib.add_argument("--root", type=Path, default=Path("."), help="where library/ lives")
+    migrate_lib.add_argument("--dry-run", action="store_true", help="report what would be imported and write nothing")
+    migrate_lib.add_argument("--json", action="store_true", help="print the report as JSON")
+    migrate_lib.set_defaults(func=_cmd_migrate_library)
 
     report = sub.add_parser("report", help="show saved lineage, metrics and lessons")
     report.add_argument("--root", type=Path, default=Path("."))
@@ -389,6 +397,26 @@ def _cmd_export_library(args: argparse.Namespace) -> int:
         for path in paths:
             print(path)
     return 0
+
+
+def _cmd_migrate_library(args: argparse.Namespace) -> int:
+    from harness_workbench.core.migrate import migrate_library
+
+    report = migrate_library(args.root, dry_run=args.dry_run)
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2))
+    else:
+        verb = "would import" if report.dry_run else "imported"
+        for harness_id, version in report.imported:
+            print(f"{verb} {harness_id} v{version}")
+        for harness_id, version in report.skipped:
+            print(f"skipped {harness_id} v{version} (already in the database)")
+        for conflict in report.conflicts:
+            print(f"conflict {conflict}")
+        for backup in report.backups:
+            print(f"backup {backup}")
+        print(f"{verb} {len(report.imported)}, skipped {len(report.skipped)}, conflicts {len(report.conflicts)}")
+    return 1 if report.conflicts else 0
 
 
 def _cmd_report(args: argparse.Namespace) -> int:
