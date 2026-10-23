@@ -340,6 +340,9 @@ class EvaluationResult:
 
 # --- Trial record ------------------------------------------------------------
 
+# Id of the check appended when a timeout is counted as a task failure under the declared policy.
+TIMEOUT_POLICY_CHECK_ID = "timeout_policy"
+
 
 @dataclass
 class TrialRecord:
@@ -360,8 +363,18 @@ class TrialRecord:
         return self.execution.status in USABLE_EXECUTION and self.evaluation.status in USABLE_EVALUATION
 
     @property
+    def timed_out_under_policy(self) -> bool:
+        """True for a timeout counted as a task failure by the declared policy (never a grader verdict)."""
+        return any(isinstance(c, dict) and c.get("id") == TIMEOUT_POLICY_CHECK_ID for c in self.evaluation.checks)
+
+    @property
     def objective_score(self) -> float | None:
-        return self.evaluation.score
+        """The score, only for a usable trial: an unusable execution never exposes one."""
+        return self.evaluation.score if self.usable else None
+
+    @property
+    def error(self) -> str | None:
+        return self.execution.error or self.evaluation.error
 
     def to_dict(self) -> dict[str, Any]:
         data = {
@@ -379,9 +392,13 @@ class TrialRecord:
             # Compatibility keys read by pre-existing report code.
             "case_id": self.task_id,
             "objective_score": self.objective_score,
-            "verified": self.evaluation.status in USABLE_EVALUATION,
-            "passed": self.evaluation.status == EvaluationStatus.PASSED,
-            "error": self.execution.error or self.evaluation.error,
+            # Both need a usable execution. A timeout that no policy counts is not usable, and one counted as
+            # a task failure under the declared policy is forced to FAILED with score 0.0 and never reads
+            # verified: its outputs were not graded as a finished run, so no timeout can read verified or passed.
+            "verified": self.usable and not self.timed_out_under_policy,
+            "passed": self.usable and self.evaluation.status == EvaluationStatus.PASSED
+            and not self.timed_out_under_policy,
+            "error": self.error,
             "tokens": self.execution.tokens.value,
             "latency_ms": self.execution.latency_ms.value,
         }

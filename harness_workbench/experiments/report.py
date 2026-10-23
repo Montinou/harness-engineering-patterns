@@ -9,6 +9,20 @@ def _h(value: Any) -> str:
     return escape(str(value), quote=True)
 
 
+def _number(value: Any, spec: str) -> str:
+    """Format a number, or an em dash when the measurement does not exist."""
+    return "—" if value is None else format(value, spec)
+
+
+def _percent(value: Any) -> str:
+    return "—" if value is None else f"{value:.1%}"
+
+
+def _result_label(row: dict[str, Any]) -> str:
+    status = row["evaluation"]["status"]
+    return {"passed": "PASS", "failed": "FAIL"}.get(status, status.replace("_", " ").upper())
+
+
 def render_html(payload: dict[str, Any]) -> str:
     summary = payload["summary"]
     rows: list[str] = []
@@ -20,9 +34,9 @@ def render_html(payload: dict[str, Any]) -> str:
         reason = ", ".join(decision.get("reasons", [])) or "—"
         rows.append("<tr>" + "".join(
             f"<td>{_h(value)}</td>" for value in [
-                name, status, f'{stats["mean_score"]:.3f}', f'{stats["pass_rate"]:.1%}',
-                f'{stats["failure_rate"]:.1%}', f'{stats["mean_tokens"]:.1f}',
-                f'{stats["mean_latency_ms"]:.1f}', ci, reason,
+                name, status, _number(stats["mean_score"], ".3f"), _percent(stats["pass_rate"]),
+                _percent(stats["failure_rate"]), _number(stats["mean_tokens"], ".1f"),
+                _number(stats["mean_latency_ms"], ".1f"), ci, reason,
             ]
         ) + "</tr>")
     cases: list[str] = []
@@ -31,12 +45,12 @@ def render_html(payload: dict[str, Any]) -> str:
             cases.append(f"<tr><td>{_h(name)}</td><td>{_h(task_id)}</td><td>{delta:+.4f}</td></tr>")
     runs: list[str] = []
     for row in payload["runs"]:
-        failed = [c["id"] for c in row["checks"] if not c["passed"]]
+        failed = [c["id"] for c in row["evaluation"]["checks"] if not c["passed"]]
         if row.get("error"):
             failed.append(row["error"])
         runs.append("<tr>" + "".join(f"<td>{_h(value)}</td>" for value in [
-            row["run_id"][:10], row["case_id"], row["variant_id"], row["repetition"],
-            f'{row["objective_score"]:.3f}', "PASS" if row["passed"] else "FAIL",
+            row["trial_id"][:10], row["task_id"], row["variant_id"], row["repetition"],
+            _number(row["objective_score"], ".3f"), _result_label(row),
             ", ".join(failed) or "—",
         ]) + "</tr>")
     css = """

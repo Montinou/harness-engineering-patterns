@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any, Protocol
 
-from harness_workbench.core.harness import Harness
+from harness_workbench.core.harness import ALL_COMPONENTS, Harness
 
 # Failure codes shared with the rule-based proposer.
 MISSING_VERIFICATION = "missing_verification"
@@ -209,6 +209,9 @@ class MockExecutor:
     """
 
     name = "mock"
+    # cost_tokens is a text-length estimate, never a billed count.
+    usage_provenance = "estimated"
+    supports = frozenset(ALL_COMPONENTS)
 
     def execute(self, harness: Harness, task: Task) -> BehavioralReport:
         failures = diagnose(harness, task)

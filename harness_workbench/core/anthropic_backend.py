@@ -128,6 +128,8 @@ class AnthropicHarnessExecutor:
     """
 
     name = "anthropic"
+    # cost_tokens is the solver plus judge API usage sum.
+    usage_provenance = "provider_reported"
 
     def __init__(
         self,
