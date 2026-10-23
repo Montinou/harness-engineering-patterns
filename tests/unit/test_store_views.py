@@ -29,6 +29,7 @@ from harness_workbench.core.store import (
 from harness_workbench.experiments import ExperimentSpec, run_experiment
 from harness_workbench.experiments.validation import ValidationError
 from tests.support import ScriptedExecutor, exact_task, write_manifest
+from tests.unit.test_improver_gate import record_decision
 
 
 def base_harness(prompt: str = "Answer") -> Harness:
@@ -74,9 +75,10 @@ class StoreViewTests(unittest.TestCase):
 
     def test_decision_id_is_recorded_in_the_summary(self) -> None:
         result = Improver(RuleBasedProposer(), MockExecutor()).improve(base_harness(), research_task())
-        run_dir = persist_result(self.root, result, decision_id="dec-1")
+        decision_id = record_decision(self.root, result.base, result.adopted)
+        run_dir = persist_result(self.root, result, decision_id=decision_id)
         summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
-        self.assertEqual(summary["decision_id"], "dec-1")
+        self.assertEqual(summary["decision_id"], decision_id)
 
     def test_base_is_never_renumbered_and_index_is_rebuilt_from_db(self) -> None:
         improve(self.root)

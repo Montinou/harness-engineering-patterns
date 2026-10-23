@@ -35,10 +35,20 @@ def persist_result(root: Path, result: Any, *, decision_id: str | None = None) -
     transaction and committed before any file is written. A failure while
     exporting raises :class:`ExportError`; ``export_library`` regenerates the
     views from the committed state.
+
+    With ``decision_id`` the adopted version is promoted through
+    ``WorkbenchDB.promote`` instead of allocated: the decision must be an
+    eligible one for exactly that candidate (otherwise ``PromotionConflict``),
+    and promoting the same decision again returns the version it created.
     """
     from harness_workbench.core.db import WorkbenchDB
 
     root = Path(root)
+    promoting = decision_id is not None and len(result.versions) > 1
+    if promoting and len(result.versions) != 2:
+        raise ValueError(
+            f"a decision promotes exactly one candidate, but the result has {len(result.versions) - 1}"
+        )
     _refuse_unmigrated(root)
     root.mkdir(parents=True, exist_ok=True)
     db = WorkbenchDB.open(root)
@@ -46,11 +56,18 @@ def persist_result(root: Path, result: Any, *, decision_id: str | None = None) -
         _refuse_unmigrated(root, db)
         with db.transaction():
             db.register_base(result.base)
-            for previous, harness in zip(result.versions, result.versions[1:]):
-                harness.version = db.allocate_child(
-                    previous.id, previous.version, harness, source=harness.lineage.source
-                )
-                harness.lineage.parent_version = previous.version
+            if promoting:
+                final = result.versions[1]
+                final.version, _created = db.promote(decision_id, final, source=final.lineage.source)
+                stored = db.get(final.id, final.version)
+                assert stored is not None
+                final.lineage.parent_version = stored.lineage.parent_version  # the decision's baseline
+            else:
+                for previous, harness in zip(result.versions, result.versions[1:]):
+                    harness.version = db.allocate_child(
+                        previous.id, previous.version, harness, source=harness.lineage.source
+                    )
+                    harness.lineage.parent_version = previous.version
         # Report metadata must describe the committed version IDs, not the provisional ones.
         for step in result.steps:
             step.base_report.harness_version = step.base.version
