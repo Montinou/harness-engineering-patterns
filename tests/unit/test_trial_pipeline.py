@@ -586,7 +586,8 @@ class BackendSelectionTests(PipelineCase):
         spec = make_spec(self.root)
         sentinel = LocalBackend()
         executor = TrialExecutor()
-        with mock.patch.object(core, "build_backend", return_value=sentinel) as build:
+        # Expectation change (T18): run_experiment selects through require_backend (build_backend's target).
+        with mock.patch.object(core, "require_backend", return_value=sentinel) as build:
             run_experiment(dataclasses.replace(spec, repetitions=1), executor, self.root / "out")
         build.assert_called_once_with(spec.environment)
         self.assertTrue(all(call["backend"] is sentinel for call in executor.calls))

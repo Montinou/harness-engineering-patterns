@@ -10,7 +10,8 @@ assertion failures.
 Coverage: sixteen reproductions for A1-A7, A9, A10 and A12 (the two A06 tests are undecorated since T5;
 the A01 shadowing test is undecorated since T8 and runs through ``evaluate_bundle``;
 the A04 latency, both A10 and the A12 output-limit tests are undecorated since T9, the grader one runs
-through ``evaluate_bundle``).
+through ``evaluate_bundle``; A02, A09 and the A12 persistence test are undecorated since T18, A02 and A09
+on v2 confirmatory manifests, the A12 crash modelled as a ``BaseException``).
  * A8 (low statistical power) has no unit reproduction; it is recreated as a
    statistical simulation in T24.
  * A11 (``test_improve_cli_can_require_experiment_validation`` fails outside CI
@@ -98,15 +99,30 @@ class A01GraderIntegrity(TempDirCase):
         self.assertEqual(result.status, EvaluationStatus.FAILED)
 
 
+_CONTROLS = {"positive": {"outputs": {"answer": "CORRECT"}}, "negatives": [{"outputs": {"answer": "INCORRECT"}}]}
+
+
+def _confirmatory(root: Path, *, tasks: list[dict], variants: list[dict]) -> Path:
+    """A schema v2 confirmatory manifest: holdout tasks get controls, trusted_local is acknowledged."""
+    tasks = [dict(task, runs_candidate_code=False,
+                  **({"controls": _CONTROLS} if task.get("split") in ("validation", "regression") else {}))
+             for task in tasks]
+    return write_manifest(
+        root, tasks=tasks, variants=variants, schema_version=2, mode="confirmatory", family="audit",
+        dataset={"id": "audit", "version": "1"}, repetitions=5,
+        environment={"mode": "trusted_local", "trusted_solver_acknowledged": True})
+
+
 class A02SingleFinalist(TempDirCase):
-    @repro
     def test_only_one_variant_reaches_validation_tasks(self) -> None:
         """A2: no held-out split or multiplicity control; every variant is scored on every task and any can win."""
+        # Converted (T18) to a v2 confirmatory manifest: five candidates, controls, acknowledged trusted_local.
         names = [f"n{i}" for i in range(5)]
         tasks = [exact_task(f"d{i}", split="development") for i in (1, 2, 3)]
         tasks += [exact_task(f"v{i}", split="validation") for i in (1, 2, 3)]
-        manifest = write_manifest(self.root / "m", tasks=tasks,
-                                  variants=[{"id": n, "system_prompt": n} for n in names])
+        tasks += [exact_task("r1", split="regression")]
+        manifest = _confirmatory(self.root / "m", tasks=tasks,
+                                 variants=[{"id": n, "system_prompt": n} for n in names])
         always = {prompt: (lambda task_id: True) for prompt in ("base", *names)}
         result = run_experiment(ExperimentSpec.load(manifest), ScriptedExecutor(always), self.root / "out")
         on_validation = {r["variant_id"] for r in result["runs"] if r["case_id"].startswith("v")} - {"baseline"}
@@ -230,23 +246,27 @@ class A07ConcurrentLineage(TempDirCase):
 
 
 class A09HoldoutReuse(TempDirCase):
-    @repro
     def test_renamed_holdout_second_candidate_is_not_eligible(self) -> None:
         """A9: the validation set is reused at every step and run; renaming task ids hides the reuse."""
         executor = ScriptedExecutor({"base": lambda t: False, "cand-a": lambda t: True, "cand-b": lambda t: True})
         library = self.root / "library-root"
 
         def holdout(prefix: str) -> list[dict]:  # same content, different ids
-            return [exact_task(f"{prefix}{i}", f"holdout case {i}", split="validation") for i in (1, 2, 3)]
+            tasks = [exact_task(f"{prefix}{i}", f"holdout case {i}", split="validation") for i in (1, 2, 3)]
+            return tasks + [exact_task(f"{prefix}-regression", "holdout regression case", split="regression")]
 
-        first = run_experiment(ExperimentSpec.load(write_manifest(
+        # Converted (T18) to v2 confirmatory manifests; the second run is EXPLORATORY_ONLY with the exposure reason.
+        first = run_experiment(ExperimentSpec.load(_confirmatory(
             self.root / "first", tasks=holdout("h"), variants=[{"id": "candidate", "system_prompt": "cand-a"}])),
             executor, library)
-        self.assertTrue(first["summary"]["contrasts"]["candidate"]["eligible"], "precondition: first use qualifies")
-        second = run_experiment(ExperimentSpec.load(write_manifest(
+        self.assertIsNone(first["exposure"]["block_reason"], "precondition: the first use reserves the holdout")
+        self.assertNotEqual(first["decision"]["status"], "exploratory_only")
+        second = run_experiment(ExperimentSpec.load(_confirmatory(
             self.root / "second", tasks=holdout("r"), variants=[{"id": "candidate", "system_prompt": "cand-b"}])),
             executor, library)
-        self.assertFalse(second["summary"]["contrasts"]["candidate"]["eligible"])
+        self.assertEqual(second["decision"]["status"], "exploratory_only")
+        self.assertIsNotNone(second["exposure"]["block_reason"])
+        self.assertIn(second["exposure"]["block_reason"], second["decision"]["reasons"])
 
 
 class A10EnvironmentSecrets(TempDirCase):
@@ -278,6 +298,28 @@ class A10EnvironmentSecrets(TempDirCase):
             self.assertEqual(evaluate("0 if 'HARNESS_TEST_CANARY' in os.environ else 1").status, EvaluationStatus.FAILED)
 
 
+class _ProcessCrash(BaseException):
+    """A process-level crash (like KeyboardInterrupt): unlike an adapter exception, no trial isolation absorbs it."""
+
+
+class _Crashing:
+    """Turns the scripted executor's ``SimulatedCrash`` into a :class:`_ProcessCrash` that ends the run.
+
+    Restructured in T18: a ``SimulatedCrash`` (an ``Exception``) raised by an adapter is, by design, one failed
+    trial (``EXECUTION_ERROR``), so the crash of the whole run is modelled as a ``BaseException``.
+    """
+
+    def __init__(self, inner: ScriptedExecutor) -> None:
+        self.inner = inner
+        self.usage_provenance = inner.usage_provenance
+
+    def execute_case(self, harness: Harness, task: Task, context: RunContext) -> BehavioralReport:
+        try:
+            return self.inner.execute_case(harness, task, context)
+        except SimulatedCrash as exc:
+            raise _ProcessCrash(str(exc)) from exc
+
+
 class A12Traceability(TempDirCase):
     def test_unbounded_solver_output_is_limited(self) -> None:
         """A12: capture_output=True has no size cap; a 20 MB stdout is held whole in the record."""
@@ -293,16 +335,21 @@ class A12Traceability(TempDirCase):
                                  ScriptedExecutor({"base": lambda t: True, "cand": lambda t: True}), self.root / "out")
         self.assertIn("implementation_hash", payload["provenance"])
 
-    @repro
     def test_trial_evidence_persisted_before_suite_end(self) -> None:
         """A12: results are persisted only at the end; a crash mid-suite loses every completed trial."""
         manifest = write_manifest(self.root / "m", tasks=[exact_task("t1"), exact_task("t2")],
                                   variants=[{"id": "candidate", "system_prompt": "cand"}])
-        executor = ScriptedExecutor({"base": lambda t: True, "cand": lambda t: True}, crash_on_call=3)
+        executor = _Crashing(ScriptedExecutor({"base": lambda t: True, "cand": lambda t: True}, crash_on_call=3))
         root = self.root / "out"
-        with self.assertRaises(SimulatedCrash):
+        with self.assertRaises(_ProcessCrash):
             run_experiment(ExperimentSpec.load(manifest), executor, root)
         self.assertTrue(any(p.suffix == ".sqlite3" for p in (root / "library").rglob("*")))
+        db = WorkbenchDB.open(root)
+        try:
+            (experiment_id,) = db.incomplete_experiments()
+            self.assertEqual(len(db.trials(experiment_id)), 2)
+        finally:
+            db.close()
 
 
 if __name__ == "__main__":

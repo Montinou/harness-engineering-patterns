@@ -90,8 +90,9 @@ class ExperimentTests(unittest.TestCase):
         fake = FakeCaseExecutor()
         result = run_experiment(spec, fake, self.root)
         self.assertEqual(len(result["runs"]), 10)
-        self.assertTrue(result["summary"]["contrasts"]["candidate"]["eligible"])
-        self.assertEqual(result["summary"]["recommended"], ["candidate"])
+        # Expectation change (T18): a legacy manifest is exploratory, so nothing is eligible or recommended.
+        self.assertEqual(result["decision"]["status"], "exploratory_only")
+        self.assertEqual(result["summary"]["recommended"], [])
         self.assertEqual(result["summary"]["contrasts"]["candidate"]["confidence_interval"], [0.5, 0.5])
         self.assertEqual(len(set(fake.workspaces)), 10)
         self.assertTrue(all(len(values) == 1 for values in fake.seeds.values()))
@@ -100,20 +101,21 @@ class ExperimentTests(unittest.TestCase):
         html = Path(result["report_path"]).read_text()
         self.assertIn("unit-experiment", html)
         self.assertIn("Paired delta CI", html)
-        # Judge gave weaker candidate a higher behavioral score; it is ignored.
-        self.assertTrue(result["summary"]["contrasts"]["candidate"]["eligible"])
+        # Judge gave weaker candidate a higher behavioral score; it is ignored by the objective diagnostics.
+        self.assertEqual(result["summary"]["contrasts"]["candidate"]["mean_delta"], 0.5)
 
     def test_detect_task_specific_regression(self) -> None:
         spec = ExperimentSpec.load(self.manifest(regression=True))
         result = run_experiment(spec, FakeCaseExecutor(), self.root)
-        decision = result["summary"]["contrasts"]["candidate"]
-        self.assertFalse(decision["eligible"])
-        self.assertIn("regression", decision["regressions"])
+        # Expectation change (T18): the per-task regression is a diagnostic of the exploratory summary.
+        self.assertIn("regression", result["summary"]["contrasts"]["candidate"]["regressions"])
+        self.assertNotEqual(result["decision"]["status"], "eligible")
 
     def test_behavioral_judge_cannot_promote_identical_outputs(self) -> None:
         spec = ExperimentSpec.load(self.manifest(fixture=False))
         result = run_experiment(spec, FlatCaseExecutor(), self.root)
-        self.assertFalse(result["summary"]["contrasts"]["candidate"]["eligible"])
+        # Expectation change (T18): asserted on the recorded decision, not the diagnostic contrast.
+        self.assertNotEqual(result["decision"]["status"], "eligible")
         self.assertEqual(result["summary"]["contrasts"]["candidate"]["mean_delta"], 0)
 
     def test_fails_closed_when_checks_missing(self) -> None:

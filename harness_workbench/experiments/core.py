@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
-import json
 import math
+import os
 import platform
 import random
 import shutil
@@ -23,19 +23,23 @@ from pathlib import Path
 from typing import Any
 
 from harness_workbench.core.executor import BehavioralReport
-from harness_workbench.experiments.backends import ExecutionBackend, ProcessLimits, build_backend
+from harness_workbench.experiments.backends import ExecutionBackend, ProcessLimits, require_backend
 from harness_workbench.experiments.contracts import (
-    TIMEOUT_POLICY_CHECK_ID, EvaluationResult, ExecutionResult, Measurement, PublicTrialRequest, TrialRecord,
+    TIMEOUT_POLICY_CHECK_ID, EvaluationResult, ExecutionResult, ExperimentDecision, Measurement,
+    PrivateExperimentPlan, PublicTrialRequest, TrialRecord,
 )
 # Case, ExperimentSpec, TaskSpec and Variant moved to manifest.py; core re-exports them.
-from harness_workbench.experiments.manifest import Case, ExperimentSpec, TaskSpec, Variant  # noqa: F401
+from harness_workbench.experiments.manifest import Case, ExperimentSpec, Split, TaskSpec, Variant  # noqa: F401
 from harness_workbench.experiments.grader import (
-    SnapshotLimits, _remove_tree, digest_path as _digest, evaluate_bundle,
+    SnapshotLimits, _remove_tree, digest_path as _digest, evaluate_bundle, run_controls,
+)
+from harness_workbench.experiments.protocol import (
+    FrozenSelection, build_plan, freeze_selection, holdout_fingerprints, select_finalist, verify_frozen,
 )
 from harness_workbench.experiments.status import (
-    USABLE_EVALUATION, USABLE_EXECUTION, EvaluationStatus, ExecutionStatus, Provenance,
+    USABLE_EVALUATION, USABLE_EXECUTION, DecisionStatus, EvaluationStatus, ExecutionStatus, Provenance,
 )
-from harness_workbench.experiments.validation import ValidationError
+from harness_workbench.experiments.validation import ValidationError, json_dumps_strict
 from harness_workbench.experiments.report import render_html
 
 
@@ -409,70 +413,274 @@ def compare(spec: ExperimentSpec, records: list[TrialRecord]) -> dict[str, Any]:
             )[:1]}
 
 
-def run_experiment(spec: ExperimentSpec, executor: Any, root: str | Path) -> dict[str, Any]:
-    """Execute a fresh paired sample for each case/repetition/variant.
 
-    An adapter implements ``execute_trial(request, workspace=, backend=, limits=)`` and sees only
-    the public request. Older adapters that implement ``execute_case(harness, task, context)`` or
-    ``execute(harness, task)`` are wrapped (see ``_legacy_execution``) and cannot claim supervised
-    latency. The backend comes from ``spec.environment.mode``; a sandbox that cannot be provided
-    raises ``BackendUnavailable`` and nothing is run.
+
+# --- orchestration --------------------------------------------------------------------------------
+
+_HOLDOUT_SPLITS = (Split.VALIDATION, Split.REGRESSION)
+_NOT_WIRED = "statistics not yet wired"
+_ELIGIBLE_WITHOUT_RESERVATION = (
+    "an eligible verdict needs the frozen finalist of a confirmatory run holding an unblocked holdout "
+    "reservation; recorded as exploratory only")
+
+
+def _alternate(variants: list[Variant], repetition: int) -> list[Variant]:
+    """Execution order for one repetition: reversed on odd repetitions to spread ordering bias."""
+    return list(reversed(variants)) if repetition % 2 else list(variants)
+
+
+def _retry(record: TrialRecord) -> bool:
+    """Only an infrastructure failure the backend marked retryable is re-run; nothing else ever is.
+
+    Adapter protocol errors are EXECUTION_ERROR with ``retryable`` false; TASK_FAILURE, TIMEOUT,
+    RESOURCE_LIMIT and every evaluated outcome are final whatever the flag says.
     """
-    # The environment mode picks the backend, and an unavailable sandbox refuses before anything starts.
-    backend = build_backend(spec.environment)
+    return record.execution.retryable and record.execution.status is ExecutionStatus.EXECUTION_ERROR
+
+
+class _Runner:
+    """Runs trials for one experiment and persists every attempt the moment it finishes."""
+
+    def __init__(self, spec: ExperimentSpec, executor: Any, backend: ExecutionBackend, limits: ProcessLimits,
+                 db: Any, experiment_id: str, implementation_hash: str) -> None:
+        self.spec, self.executor, self.backend, self.limits = spec, executor, backend, limits
+        self.db, self.experiment_id, self.implementation_hash = db, experiment_id, implementation_hash
+        self.attempts: list[TrialRecord] = []  # every attempt, in execution order
+        self.final: list[TrialRecord] = []  # the last attempt of each trial: what decisions use
+
+    def trial(self, variant: Variant, task: TaskSpec, repetition: int) -> None:
+        for attempt in range(1, self.spec.statistics.max_attempts + 1):
+            record = run_trial(
+                self.spec, variant, task, repetition=repetition, attempt=attempt, executor=self.executor,
+                backend=self.backend, limits=self.limits, experiment_id=self.experiment_id,
+                implementation_hash=self.implementation_hash,
+            )
+            self.db.record_trial(self.experiment_id, record)
+            self.attempts.append(record)
+            if not _retry(record):
+                break
+        self.final.append(record)
+
+    def grid(self, variants: list[Variant], tasks: tuple[TaskSpec, ...]) -> None:
+        for task in tasks:
+            for repetition in range(self.spec.repetitions):
+                for variant in _alternate(variants, repetition):
+                    self.trial(variant, task, repetition)
+
+
+def _candidate(spec: ExperimentSpec, selection: FrozenSelection | None) -> tuple[str | None, str | None]:
+    if selection is not None:
+        return selection.finalist_id, selection.finalist_hash
+    if len(spec.variants) == 2:
+        only = spec.variants[1]
+        return only.id, only.harness.execution_config_hash()
+    return None, None
+
+
+def _interim_decide(plan: PrivateExperimentPlan, records: list[TrialRecord], *, spec: ExperimentSpec,
+                    selection: FrozenSelection | None, integrity_problems: list[str],
+                    exploratory_reason: str | None) -> ExperimentDecision:
+    """The decision until the statistics are wired: never eligible.
+
+    ``INVALID_EXPERIMENT`` for integrity problems, ``EXPLORATORY_ONLY`` for a non-confirmatory spec or a
+    blocked holdout, otherwise ``INSUFFICIENT_EVIDENCE``.
+    """
+    pending: list[str] = []
+    if integrity_problems:
+        status, reasons = DecisionStatus.INVALID_EXPERIMENT, list(integrity_problems)
+    elif spec.mode != "confirmatory" or exploratory_reason:
+        status = DecisionStatus.EXPLORATORY_ONLY
+        reasons = [f"mode is {spec.mode}"] if spec.mode != "confirmatory" else []
+        if spec.legacy:
+            reasons.append("schema v1 manifest")
+        if exploratory_reason:
+            reasons.append(exploratory_reason)
+    else:
+        status, reasons, pending = DecisionStatus.INSUFFICIENT_EVIDENCE, [_NOT_WIRED], [_NOT_WIRED]
+    if spec.mode == "confirmatory":
+        evidence = [record.trial_id for record in records if record.split in {s.value for s in _HOLDOUT_SPLITS}]
+    else:
+        evidence = [record.trial_id for record in records]
+    candidate_id, candidate_hash = _candidate(spec, selection)
+    baseline = spec.variants[0].harness
+    return ExperimentDecision(
+        status=status, reasons=reasons, estimate=None, lower_bound=None, n_units=0, plan_hash=plan.plan_hash,
+        candidate_id=candidate_id, candidate_hash=candidate_hash,
+        baseline_hash=baseline.execution_config_hash(), baseline_id=baseline.id,
+        baseline_version=baseline.version, evidence_ids=evidence, pending_requirements=pending, diagnostics={},
+    )
+
+
+def _guard_eligible(decision: ExperimentDecision, *, spec: ExperimentSpec, selection: FrozenSelection | None,
+                    reserved: bool, integrity_problems: list[str],
+                    exploratory_reason: str | None) -> ExperimentDecision:
+    """An eligible verdict stands only for the frozen finalist of a clean confirmatory run with a reservation.
+
+    ``record_decision`` does not check exposure, so this is where it is enforced; anything else is
+    downgraded (fail closed) rather than recorded as eligible.
+    """
+    if decision.status is not DecisionStatus.ELIGIBLE:
+        return decision
+    if (spec.mode == "confirmatory" and selection is not None and reserved and not integrity_problems
+            and decision.candidate_hash == selection.finalist_hash):
+        return decision
+    status = DecisionStatus.INVALID_EXPERIMENT if integrity_problems else DecisionStatus.EXPLORATORY_ONLY
+    added = [*integrity_problems, *([exploratory_reason] if exploratory_reason else []), _ELIGIBLE_WITHOUT_RESERVATION]
+    return dataclasses.replace(decision, status=status,
+                               reasons=[*decision.reasons, *(item for item in added if item not in decision.reasons)])
+
+
+def _write_atomic(path: Path, text: str) -> None:
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(text, encoding="utf-8")
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def _settings(spec: ExperimentSpec) -> dict[str, Any]:
+    return {
+        "repetitions": spec.repetitions, "seed": spec.seed,
+        "min_samples": spec.min_samples, "min_improvement": spec.min_improvement,
+        "max_regression": spec.max_regression,
+        # None means unlimited; spec.max_cost_ratio maps it to inf, which strict JSON cannot carry.
+        "max_cost_ratio": spec.budget.max_token_ratio,
+        "max_latency_ratio": spec.budget.max_latency_ratio,
+        "confidence": spec.confidence, "bootstrap_iterations": spec.bootstrap_iterations,
+        "max_attempts": spec.statistics.max_attempts,
+    }
+
+
+def _provenance(spec: ExperimentSpec, executor: Any) -> dict[str, Any]:
+    return {
+        "manifest_sha256": spec.source_hash,
+        "python": sys.version.split()[0], "platform": platform.platform(),
+        "executor": type(executor).__name__,
+        "workspace_and_seed_supported": any(
+            callable(getattr(executor, name, None)) for name in ("execute_trial", "execute_case")),
+        "source": str(spec.source) if spec.source else None,
+        "model": str(getattr(executor, "solver_model", "unreported")),
+        "executor_configured": spec.executor_config.get("type", "model"),
+    }
+
+
+def run_experiment(spec: ExperimentSpec, executor: Any, root: str | Path, *,
+                   backend: ExecutionBackend | None = None, db: Any = None, decide=None) -> dict[str, Any]:
+    """Run ``spec`` in phases, persisting every trial as it finishes, and record one decision.
+
+    Confirmatory: controls of every validation and regression task are checked first (a failure is an
+    ``INVALID_EXPERIMENT`` with no trials); with more than one candidate a development phase chooses the
+    finalist, which is frozen and persisted; the holdout is reserved for it, the frozen hashes are verified,
+    and only the baseline and the finalist run the validation and regression tasks. A blocked reservation
+    makes the run's results exploratory. Exploratory (legacy or ``mode: exploratory``): every variant runs
+    every task. A trial is retried only for a retryable infrastructure failure, up to
+    ``statistics.max_attempts``; every attempt is recorded and decisions use the last one.
+
+    The backend is ``require_backend(spec.environment)`` unless one is given: a sandbox that cannot be
+    provided raises ``BackendUnavailable`` before anything is created. An exception after the experiment
+    row is written leaves it ``running`` (``db.incomplete_experiments()`` lists it) and is re-raised.
+    """
+    backend = backend or require_backend(spec.environment)
+    limits = ProcessLimits.from_config(spec.environment.limits)  # run_trial applies the executor's own cap
     destination = Path(root).resolve()
     destination.mkdir(parents=True, exist_ok=True)
+    owned = db is None
+    if owned:
+        from harness_workbench.core.db import WorkbenchDB  # imported here: core.db imports this package
+        db = WorkbenchDB.open(destination)
+    try:
+        return _run(spec, executor, destination, backend, limits, db, decide or _interim_decide)
+    finally:
+        if owned:
+            db.close()
+
+
+def _run(spec: ExperimentSpec, executor: Any, destination: Path, backend: ExecutionBackend, limits: ProcessLimits,
+         db: Any, decide: Any) -> dict[str, Any]:
+    implementation_hash = _implementation_hash()
+    plan = build_plan(spec)
     experiment_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S") + "-" + uuid.uuid4().hex[:12]
+    db.start_experiment(experiment_id, name=spec.name, family=spec.family, mode=spec.mode,
+                        schema_version=spec.schema_version, plan=plan, implementation_hash=implementation_hash)
     out_dir = destination / "experiments" / experiment_id
     out_dir.mkdir(parents=True, exist_ok=False)
-    limits = ProcessLimits.from_config(spec.environment.limits)
-    implementation_hash = _implementation_hash()
-    records: list[TrialRecord] = []
-    for case in spec.cases:
-        for repetition in range(spec.repetitions):
-            # Rotate execution order to reduce provider/time-of-day ordering bias.
-            variants = list(spec.variants)
-            if repetition % 2:
-                variants.reverse()
-            for variant in variants:
-                records.append(run_trial(
-                    spec, variant, case, repetition=repetition, attempt=1, executor=executor,
-                    backend=backend, limits=limits, experiment_id=experiment_id,
-                    implementation_hash=implementation_hash,
-                ))
-    summary = compare(spec, records)
-    payload = {
+    runner = _Runner(spec, executor, backend, limits, db, experiment_id, implementation_hash)
+    baseline = spec.variants[0]
+    confirmatory = spec.mode == "confirmatory"
+    fingerprints = holdout_fingerprints(spec) if confirmatory else {}
+    problems: list[str] = []
+    selection: FrozenSelection | None = None
+    exploratory_reason: str | None = None
+    earlier: tuple[str, ...] = ()
+    reserved = False
+    if confirmatory:
+        snapshot = SnapshotLimits(limits.max_files, limits.max_total_bytes)
+        for split in _HOLDOUT_SPLITS:
+            for task in spec.tasks_in(split):
+                problems.extend(run_controls(task, backend=backend, limits=limits, snapshot_limits=snapshot))
+    if confirmatory and not problems:
+        candidates = list(spec.variants[1:])
+        if len(candidates) > 1:
+            runner.grid(list(spec.variants), spec.tasks_in(Split.DEVELOPMENT))
+        finalist_id, evidence = select_finalist(
+            spec, [record for record in runner.final if record.split == Split.DEVELOPMENT.value])
+        if finalist_id is None:
+            problems.append(f"no finalist could be selected: {evidence.get('problem', 'unknown reason')}")
+        else:
+            selection = freeze_selection(spec, plan, finalist_id, evidence=evidence)
+            db.record_selection(experiment_id, selection.to_dict())
+            reservation = db.reserve_holdout_attempt(
+                task_fingerprints=fingerprints.values(), candidate_hash=selection.finalist_hash,
+                baseline_hash=selection.baseline_hash, policy_hash=selection.policy_hash,
+                experiment_id=experiment_id)
+            exploratory_reason, earlier = reservation.blocked_reason, reservation.earlier_experiment_ids
+            reserved = exploratory_reason is None
+            finalist = next(variant for variant in candidates if variant.id == finalist_id)
+            problems.extend(verify_frozen(selection, finalist.harness, baseline.harness, plan))
+            if not problems:
+                holdout = tuple(task for split in _HOLDOUT_SPLITS for task in spec.tasks_in(split))
+                runner.grid([baseline, finalist], holdout)
+    elif not confirmatory:
+        runner.grid(list(spec.variants), spec.tasks)
+
+    # Diagnostics first: if they cannot be computed the experiment stays running, with no decision.
+    summary = compare(spec, runner.final)
+    decision = decide(plan, list(runner.final), spec=spec, selection=selection, integrity_problems=list(problems),
+                      exploratory_reason=exploratory_reason)
+    decision = _guard_eligible(decision, spec=spec, selection=selection, reserved=reserved,
+                               integrity_problems=problems, exploratory_reason=exploratory_reason)
+    if earlier:
+        decision.diagnostics = {**decision.diagnostics, "earlier_experiment_ids": list(earlier)}
+    decision_id = db.record_decision(experiment_id, decision)
+    db.finish_experiment(experiment_id, "invalid" if decision.status is DecisionStatus.INVALID_EXPERIMENT
+                         else "complete")
+
+    # The contrasts are diagnostics; only an eligible decision recommends anything.
+    summary["recommended"] = (
+        [decision.candidate_id] if decision.status is DecisionStatus.ELIGIBLE and decision.candidate_id else [])
+    payload: dict[str, Any] = {
         "experiment_id": experiment_id,
         "created_at": _utc(),
         "name": spec.name,
-        "settings": {
-            "repetitions": spec.repetitions, "seed": spec.seed,
-            "min_samples": spec.min_samples, "min_improvement": spec.min_improvement,
-            "max_regression": spec.max_regression,
-            # None means unlimited; spec.max_cost_ratio maps it to inf, which JSON cannot carry.
-            "max_cost_ratio": spec.budget.max_token_ratio,
-            "max_latency_ratio": spec.budget.max_latency_ratio,
-            "confidence": spec.confidence, "bootstrap_iterations": spec.bootstrap_iterations,
-        },
-        "provenance": {
-            "manifest_sha256": spec.source_hash,
-            "python": sys.version.split()[0], "platform": platform.platform(),
-            "executor": type(executor).__name__,
-            "workspace_and_seed_supported": any(
-                callable(getattr(executor, name, None)) for name in ("execute_trial", "execute_case")),
-            "source": str(spec.source) if spec.source else None,
-            "model": str(getattr(executor, "solver_model", "unreported")),
-            "executor_configured": spec.executor_config.get("type", "model"),
-        },
+        "mode": spec.mode,
+        "schema_version": spec.schema_version,
+        "settings": _settings(spec),
+        "provenance": _provenance(spec, executor),
         "variants": [{"id": v.id, "harness": str(v.source), "sha256": v.fingerprint,
                       "version": v.harness.version} for v in spec.variants],
-        "tasks": [{"id": case.id, "fixture_sha256": case.fixture_hash, "checks": list(case.checks)}
-                  for case in spec.cases],
+        "tasks": [{"id": task.id, "split": task.split.value if task.split else None, "family": task.family,
+                   "fixture_sha256": task.fixture_hash, "checks": list(task.checks)} for task in spec.tasks],
+        "selection": selection.to_dict() if selection is not None else None,
+        "exposure": {"fingerprints": sorted(fingerprints.values()), "block_reason": exploratory_reason},
         "summary": summary,
-        "runs": [item.to_dict() for item in records],
+        "decision": decision.to_dict(),
+        "decision_id": decision_id,
+        "runs": [record.to_dict() for record in runner.attempts],
+        "report_path": str(out_dir / "report.html"),
+        "results_path": str(out_dir / "results.json"),
     }
-    (out_dir / "results.json").write_text(json.dumps(payload, indent=2, ensure_ascii=False, default=str, allow_nan=False) + "\n", encoding="utf-8")
-    (out_dir / "report.html").write_text(render_html(payload), encoding="utf-8")
-    payload["report_path"] = str(out_dir / "report.html")
-    payload["results_path"] = str(out_dir / "results.json")
+    _write_atomic(out_dir / "results.json", json_dumps_strict(payload, indent=2, ensure_ascii=False) + "\n")
+    _write_atomic(out_dir / "report.html", render_html(payload))
     return payload
