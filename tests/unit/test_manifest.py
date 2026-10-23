@@ -1,4 +1,5 @@
 import copy
+import dataclasses
 import io
 import json
 import tempfile
@@ -424,6 +425,39 @@ class ConfirmatoryTests(ManifestCase):
         data["tasks"][-1]["family"] = data["tasks"][1].get("family", "val-1")
         self.load_dict(data)
 
+    def test_confirmatory_rejects_a_family_spanning_splits(self):
+        # Same family in development and validation, description differing by one word.
+        data = v2_dict()
+        data["tasks"][0]["family"] = "famA"
+        data["tasks"][1]["family"] = "famA"
+        data["tasks"][0]["description"] = DESCRIPTIONS["val-1"] + " now"
+        message = self.assert_confirmatory_problem(data, "family famA", "more than one split", "dev-1", "val-1")
+        self.assertIn("development", message)
+        self.assertIn("validation", message)
+        # Same prompt in two splits with a different expected value: different content fingerprint,
+        # still the same family, still rejected.
+        data = v2_dict()
+        data["tasks"][0]["family"] = "famA"
+        data["tasks"][1]["family"] = "famA"
+        data["tasks"][0]["description"] = DESCRIPTIONS["val-1"]
+        data["tasks"][0]["checks"][0]["value"] = "OTHER"
+        self.assert_confirmatory_problem(data, "family famA", "more than one split")
+        # A family confined to one split is fine, and so are distinct families across splits.
+        data = v2_dict()
+        data["tasks"][1]["family"] = "famV"
+        data["tasks"][2]["family"] = "famV"
+        self.assertEqual(self.load_dict(data).validate_confirmatory(), [])
+
+    def test_near_duplicates_in_different_splits_are_not_skipped_by_a_shared_family(self):
+        spec = self.load_dict(v2_dict(mode="exploratory"))
+        tasks = list(spec.tasks)
+        tasks[0] = dataclasses.replace(
+            tasks[0], family="famA", task=dataclasses.replace(
+                tasks[0].task, description=DESCRIPTIONS["val-1"] + " now"))
+        tasks[1] = dataclasses.replace(tasks[1], family="famA")
+        problems = dataclasses.replace(spec, mode="exploratory", tasks=tuple(tasks)).validate_confirmatory()
+        self.assertTrue(any("near-duplicate" in p and "dev-1:val-1" in p for p in problems), problems)
+
     def test_confirmatory_rejects_repetitions_below_profile(self):
         self.assert_confirmatory_problem(v2_dict(repetitions=2), "repetitions", "binary_v1")
         for statistics in ({"min_independent_units": 10}, {"min_regression_units": 10},
@@ -475,6 +509,38 @@ class ConfirmatoryTests(ManifestCase):
         data = v2_dict()
         del data["tasks"][0]["split"]
         self.assert_confirmatory_problem(data, "dev-1", "split")
+
+
+class ApiValidationTests(ManifestCase):
+    def test_directly_built_spec_is_validated_like_the_json_path(self):
+        spec = self.load_dict(v2_dict(mode="exploratory"))
+        for key, value in (
+            ("repetitions", True), ("repetitions", 0), ("repetitions", 1001), ("repetitions", 5.0),
+            ("seed", float("nan")), ("seed", True), ("seed", -1), ("seed", "3"),
+            ("mode", "other"), ("schema_version", 3), ("finalists", True),
+            ("statistics", {"alpha": 0.05}), ("budget", None), ("environment", "sandboxed"),
+            ("executor", {}),
+        ):
+            with self.subTest(key=key, value=value), self.assertRaises(ManifestError):
+                dataclasses.replace(spec, **{key: value})
+        with self.assertRaises(ManifestError):
+            dataclasses.replace(spec, repetitions=True, seed=float("nan"))
+        self.assertEqual(dataclasses.replace(spec, repetitions=7, seed=0).repetitions, 7)
+
+    def test_replace_to_confirmatory_runs_the_confirmatory_checks(self):
+        spec = self.load_dict(v2_dict(mode="exploratory"))
+        with self.assertRaises(ManifestError) as caught:
+            dataclasses.replace(spec, mode="confirmatory", repetitions=2)
+        self.assertIn("confirmatory manifest is not valid", str(caught.exception))
+        self.assertIn("repetitions", str(caught.exception))
+        valid = dataclasses.replace(spec, mode="confirmatory")
+        self.assertEqual(valid.validate_confirmatory(), [])
+        # Review Focus 2: a candidate whose execution configuration equals the baseline's.
+        twin = dataclasses.replace(valid.variants[1], harness=valid.variants[0].harness,
+                                   config_hash=valid.variants[0].config_hash)
+        with self.assertRaises(ManifestError) as caught:
+            dataclasses.replace(valid, variants=(valid.variants[0], twin))
+        self.assertIn("same execution configuration as the baseline", str(caught.exception))
 
 
 class MigrationTests(ManifestCase):

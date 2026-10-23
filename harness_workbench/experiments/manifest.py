@@ -605,6 +605,36 @@ class ExperimentSpec:
     duplicate_review: tuple[str, ...] = ()
     finalists: int | None = None
 
+    def __post_init__(self) -> None:
+        # Runs for every construction path (JSON, ``dataclasses.replace``, direct calls), so an
+        # object built through the Python API is validated like a parsed manifest.
+        try:
+            _set(
+                self,
+                schema_version=require_int("schema_version", self.schema_version),
+                repetitions=require_int("repetitions", self.repetitions, minimum=1, maximum=1000),
+                seed=require_int("seed", self.seed, minimum=0),
+            )
+            if self.finalists is not None:
+                _set(self, finalists=require_int("finalists", self.finalists))
+        except ManifestError:
+            raise
+        except ValidationError as exc:
+            raise ManifestError(str(exc)) from exc
+        if self.schema_version not in (1, SCHEMA_VERSION):
+            raise ManifestError(
+                f"unsupported schema_version {self.schema_version}; this build reads 1 and {SCHEMA_VERSION}")
+        if self.mode not in EXPERIMENT_MODES:
+            raise ManifestError(f"mode must be one of {list(EXPERIMENT_MODES)}, got {self.mode!r}")
+        for name, kind in (("statistics", StatisticsPolicy), ("budget", BudgetPolicy),
+                           ("environment", EnvironmentConfig), ("executor", ExecutorConfig)):
+            if not isinstance(getattr(self, name), kind):
+                raise ManifestError(f"{name} must be a {kind.__name__}, got {type(getattr(self, name)).__name__}")
+        if self.mode == "confirmatory":
+            problems = self.validate_confirmatory()
+            if problems:
+                raise ManifestError("confirmatory manifest is not valid: " + "; ".join(problems))
+
     # -- loading --
 
     @classmethod
@@ -639,10 +669,6 @@ class ExperimentSpec:
             raise
         except ValidationError as exc:
             raise ManifestError(str(exc)) from exc
-        if spec.mode == "confirmatory":
-            problems = spec.validate_confirmatory()
-            if problems:
-                raise ManifestError("confirmatory manifest is not valid: " + "; ".join(problems))
         return spec
 
     @classmethod
@@ -831,6 +857,16 @@ class ExperimentSpec:
             if len({task.split for task in group}) > 1:
                 problems.append("tasks with the same content appear in different splits: "
                                 + ", ".join(task.id for task in group))
+        splits_by_family: dict[str, list[TaskSpec]] = {}
+        for task in self.tasks:
+            if task.split is not None:
+                splits_by_family.setdefault(task.family, []).append(task)
+        for family, members in splits_by_family.items():
+            spanned = sorted({task.split.value for task in members})
+            if len(spanned) > 1:
+                problems.append(
+                    f"family {family} appears in more than one split ({', '.join(spanned)}): "
+                    + ", ".join(task.id for task in members))
         reviewed = set()
         for pair in self.duplicate_review:
             left, right = pair.split(":")
@@ -838,7 +874,8 @@ class ExperimentSpec:
         words = {task.id: _words(task.task.description) for task in self.tasks}
         for index, first in enumerate(self.tasks):
             for second in self.tasks[index + 1:]:
-                if first.family == second.family or (first.id, second.id) in reviewed:
+                if ((first.family == second.family and first.split == second.split)
+                        or (first.id, second.id) in reviewed):
                     continue
                 a, b = words[first.id], words[second.id]
                 if a and b and len(a & b) / len(a | b) >= 0.8:
