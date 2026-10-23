@@ -12,9 +12,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+from harness_workbench.core.db import StoreBusyError
 from harness_workbench.core.executor import BehavioralReport, Executor, MockExecutor, Task
 from harness_workbench.core.harness import Harness
 from harness_workbench.core.proposer import Candidate, Proposer, RuleBasedProposer, apply_edit
+from harness_workbench.experiments.backends import BackendUnavailable
+
+# A gate that could not run says nothing about the candidate: these are errors, never a rejection.
+_INFRASTRUCTURE_ERRORS = (OSError, StoreBusyError, BackendUnavailable)
 
 DEFAULT_MARGIN = 0.05
 
@@ -187,16 +192,17 @@ class Improver:
         if final is base:
             return
         assert self.promotion_gate is not None
-        lessons: list[str] = []
         try:
             verdict = self.promotion_gate(base, final)
             if isinstance(verdict, bool):
                 verdict = GateVerdict(verdict)
             elif not isinstance(verdict, GateVerdict):
                 raise TypeError(f"promotion gate must return bool or GateVerdict, got {type(verdict).__name__}")
+        except _INFRASTRUCTURE_ERRORS:
+            raise  # not a rejection of the candidate: nothing is persisted and the caller reports the failure
         except Exception as exc:
-            lessons.append(f"VALIDATION ERROR: {type(exc).__name__}: {exc}")
-            verdict = GateVerdict(False)
+            self._roll_back(result, [f"VALIDATION ERROR: {type(exc).__name__}: {exc}"])
+            return
         if verdict.approved:
             result.decision_id = verdict.decision_id
             final.lineage.parent_version = base.version
@@ -208,13 +214,16 @@ class Improver:
             final.lineage.lessons = list(result.lessons)
             result.versions = [base, final]
             return
-        lessons.append("VALIDATION REJECT: independently checked candidate did not qualify; base harness kept.")
+        self._roll_back(result, ["VALIDATION REJECT: independently checked candidate did not qualify; base harness kept."])
+
+    @staticmethod
+    def _roll_back(result: ImprovementResult, lessons: list[str]) -> None:
         result.lessons.extend(lessons)
         last = result.steps[-1]
         last.lessons.extend(lessons)
-        last.adopted = base
+        last.adopted = result.base
         last.adopted_report = result.base_report
-        result.versions = [base]
+        result.versions = [result.base]
 
     def _sequential(self, harness: Harness, task: Task, *, k: int) -> ImprovementResult:
         current = harness

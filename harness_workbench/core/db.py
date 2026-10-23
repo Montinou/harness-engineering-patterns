@@ -8,6 +8,7 @@ subprocess or network call: callers do slow work first and write afterwards.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import math
 import re
@@ -565,6 +566,25 @@ class WorkbenchDB:
             )
         return HoldoutReservation(reason, tuple(earlier))
 
+    def record_holdout_exposure(self, *, task_fingerprints: Iterable[str], experiment_id: str) -> None:
+        """Mark holdout content as executed by an experiment that selects nothing (an exploratory run).
+
+        The rows carry no candidate: once the experiment records its decision they are consumed, so a later
+        confirmation of the same content is blocked, whatever ids the tasks carry. Until then they count
+        as a reservation by another candidate. Call before the first holdout trial.
+        """
+        fingerprints = list(dict.fromkeys(task_fingerprints))
+        if not fingerprints:
+            return
+        with self.transaction() as conn:
+            self._experiment_plan_hash(conn, experiment_id)  # the experiment must be registered
+            now = self._now()
+            conn.executemany(
+                "INSERT INTO holdout_exposure(task_fingerprint, candidate_hash, baseline_hash, policy_hash,"
+                " experiment_id, reserved_at, decision_status, blocked_reason) VALUES(?,NULL,NULL,NULL,?,?,NULL,NULL)",
+                [(fingerprint, experiment_id, now) for fingerprint in fingerprints],
+            )
+
     @staticmethod
     def _exposure_block(
         existing: dict[str, list[sqlite3.Row]],
@@ -609,7 +629,14 @@ class WorkbenchDB:
     # -- decisions and promotion ----------------------------------------
 
     def record_decision(self, experiment_id: str, decision: ExperimentDecision) -> str:
-        """Store the decision (one per experiment) and mark this experiment's reservations as consumed."""
+        """Store the decision (one per experiment) and mark this experiment's reservations as consumed.
+
+        An eligible decision stands only while no other experiment has already recorded a decision on any
+        holdout task this experiment reserved: overlapping confirmations of one candidate must not each be
+        promotable (best of N). The check shares the transaction with the insert, so exactly one of two
+        concurrent decisions keeps ``eligible``; the later one is stored as ``exploratory_only``. Read the
+        stored decision back with :meth:`decision` to see what was recorded.
+        """
         # Rebuild through the validating constructor: a decision mutated after construction must not
         # reach the table without its invariants.
         checked = ExperimentDecision.from_dict(decision.to_dict())
@@ -618,6 +645,23 @@ class WorkbenchDB:
         with self.transaction() as conn:
             if checked.plan_hash != self._experiment_plan_hash(conn, experiment_id):
                 raise ValueError("decision plan_hash does not match the experiment plan")
+            if checked.status is DecisionStatus.ELIGIBLE:
+                earlier = conn.execute(
+                    "SELECT DISTINCT other.experiment_id FROM holdout_exposure mine"
+                    " JOIN holdout_exposure other ON other.task_fingerprint=mine.task_fingerprint"
+                    " WHERE mine.experiment_id=? AND mine.blocked_reason IS NULL"
+                    " AND other.experiment_id<>mine.experiment_id AND other.blocked_reason IS NULL"
+                    " AND other.decision_status IS NOT NULL ORDER BY other.id",
+                    (experiment_id,),
+                ).fetchall()
+                if earlier:
+                    ids = [row["experiment_id"] for row in earlier]
+                    checked = dataclasses.replace(
+                        checked, status=DecisionStatus.EXPLORATORY_ONLY,
+                        reasons=[*checked.reasons,
+                                 "holdout already consumed by a decision in experiment "
+                                 f"{', '.join(ids)}; recorded as exploratory only"])
+                    decision_json = json_dumps_strict(checked.to_dict(), sort_keys=True, ensure_ascii=False)
             conn.execute(
                 "INSERT INTO decisions(decision_id, experiment_id, status, candidate_hash, baseline_id,"
                 " baseline_version, plan_hash, decision_json, created_at) VALUES(?,?,?,?,?,?,?,?,?)",

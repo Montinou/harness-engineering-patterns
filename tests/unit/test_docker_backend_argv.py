@@ -379,20 +379,21 @@ class RunAndCleanupTests(unittest.TestCase):
 
     def assert_infra_failure(self, outcome, exit_code):
         self.assertEqual(outcome.status.value, "execution_error")
-        self.assertTrue(outcome.retryable)
+        # a solver can produce these exit codes and stderr itself, so a retry could be triggered by it
+        self.assertFalse(outcome.retryable)
         self.assertEqual(outcome.exit_code, exit_code)
         self.assertIn(f"exit {exit_code}", outcome.error)
         self.assertIn("docker", outcome.error)
 
-    def test_docker_exit_125_is_a_retryable_execution_error_not_a_task_failure(self):
+    def test_docker_exit_125_is_a_non_retryable_execution_error_not_a_task_failure(self):
         backend, _ = self.probed(task_rc=125, task_stderr="docker: Error response from daemon: Conflict.\n")
         self.assert_infra_failure(self.run_it(backend), 125)
 
-    def test_docker_exit_127_with_docker_prefix_is_a_retryable_execution_error(self):
+    def test_docker_exit_127_with_docker_prefix_is_a_non_retryable_execution_error(self):
         backend, _ = self.probed(task_rc=127, task_stderr="docker: Error response from daemon: executable not found.\n")
         self.assert_infra_failure(self.run_it(backend), 127)
 
-    def test_docker_exit_126_with_exec_prefix_is_a_retryable_execution_error(self):
+    def test_docker_exit_126_with_exec_prefix_is_a_non_retryable_execution_error(self):
         backend, _ = self.probed(task_rc=126, task_stderr="exec: permission denied\n")
         self.assert_infra_failure(self.run_it(backend), 126)
 

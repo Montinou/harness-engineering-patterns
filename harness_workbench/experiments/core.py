@@ -643,6 +643,11 @@ def _run(spec: ExperimentSpec, executor: Any, destination: Path, backend: Execut
                 holdout = tuple(task for split in _HOLDOUT_SPLITS for task in spec.tasks_in(split))
                 runner.grid([baseline, finalist], holdout)
     elif not confirmatory:
+        # Every variant runs every task, so results on holdout content are exposed to selection: consume
+        # that content before it runs, or a later confirmation of the winner would reuse it (spec §4).
+        exposed = holdout_fingerprints(spec)
+        if exposed:
+            db.record_holdout_exposure(task_fingerprints=exposed.values(), experiment_id=experiment_id)
         runner.grid(list(spec.variants), spec.tasks)
 
     # Diagnostics first: if they cannot be computed the experiment stays running, with no decision.
@@ -654,6 +659,8 @@ def _run(spec: ExperimentSpec, executor: Any, destination: Path, backend: Execut
     if earlier:
         decision.diagnostics = {**decision.diagnostics, "earlier_experiment_ids": list(earlier)}
     decision_id = db.record_decision(experiment_id, decision)
+    # The store may downgrade an eligible decision (holdout already decided elsewhere): report what it kept.
+    decision = db.decision(decision_id) or decision
     db.finish_experiment(experiment_id, "invalid" if decision.status is DecisionStatus.INVALID_EXPERIMENT
                          else "complete")
 

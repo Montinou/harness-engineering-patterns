@@ -26,8 +26,8 @@ from harness_workbench.core.executor import Executor, MockExecutor, Task
 from harness_workbench.core.harness import Harness, load_harness
 from harness_workbench.core.improver import DEFAULT_MARGIN, GateVerdict, Improver
 from harness_workbench.core.proposer import FileProposer, LLMProposer, Proposer, ProposerError, RuleBasedProposer
-from harness_workbench.core.db import LineageConflict, SchemaMismatch, StoreBusyError
-from harness_workbench.experiments.backends import BackendUnavailable
+from harness_workbench.core.db import LineageConflict, PromotionConflict, SchemaMismatch, StoreBusyError
+from harness_workbench.experiments.backends import BackendUnavailable, require_backend
 from harness_workbench.core.store import (
     ExportError,
     MigrationRequired,
@@ -47,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
     except (
         FileNotFoundError, ValueError, ProposerError, AnthropicError, OSError,
         MigrationRequired, ExportError, LineageConflict, SchemaMismatch, StoreBusyError,
-        BackendUnavailable,
+        BackendUnavailable, PromotionConflict,
     ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -261,6 +261,8 @@ def _cmd_improve(args: argparse.Namespace) -> int:
         raise ValueError(
             "validation spec is exploratory (schema v1 or mode exploratory); run 'harness-workbench "
             "migrate-manifest' and assign splits and controls")
+    # An execution backend the spec asks for must exist before anything runs or is paid for (exit 2).
+    validation_backend = require_backend(validation_spec.environment) if validation_spec is not None else None
     proposer, executor = _backend(args)
     gate = None
     validation_evidence: list[dict] = []
@@ -280,7 +282,7 @@ def _cmd_improve(args: argparse.Namespace) -> int:
             controlled = replace(validation_spec, variants=(
                 variant("baseline", before), variant("candidate", candidate),
             ))
-            outcome = run_experiment(controlled, validation_executor, args.root)
+            outcome = run_experiment(controlled, validation_executor, args.root, backend=validation_backend)
             evidence = {
                 "report": outcome["report_path"], "results": outcome["results_path"],
                 "decision": outcome["decision"],

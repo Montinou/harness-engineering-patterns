@@ -507,7 +507,12 @@ class DockerBackend:
 
     @staticmethod
     def _classify_docker_failure(outcome: ProcessOutcome) -> ProcessOutcome:
-        """Docker's own failures are infrastructure errors, never a scoreable solver failure."""
+        """Docker's own failures are infrastructure errors, never a scoreable solver failure.
+
+        These codes are also what a solver can exit with, and the stderr prefix is solver-controlled, so
+        the outcome is never ``retryable``: a retry the solver could trigger would be best-of-N against
+        the baseline. It stays an ``EXECUTION_ERROR`` (fail closed) and the attempt remains the evidence.
+        """
         if outcome.status is not ExecutionStatus.TASK_FAILURE:
             return outcome
         code = outcome.exit_code
@@ -515,7 +520,7 @@ class DockerBackend:
         if code == _DOCKER_RUN_ERROR or (code in _DOCKER_EXEC_ERRORS and starts_with_docker):
             detail = " ".join(outcome.stderr.split())[:300] or "no stderr"
             return replace(
-                outcome, status=ExecutionStatus.EXECUTION_ERROR, retryable=True,
+                outcome, status=ExecutionStatus.EXECUTION_ERROR, retryable=False,
                 error=(f"docker infrastructure failure (exit {code}), not a solver result: {detail}"))
         return outcome
 
