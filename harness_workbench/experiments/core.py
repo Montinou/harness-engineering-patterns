@@ -21,10 +21,11 @@ from pathlib import Path
 from typing import Any
 
 from harness_workbench.core.executor import BehavioralReport
-from harness_workbench.experiments.checks import evaluate_checks
+from harness_workbench.experiments.backends import ExecutionBackend, LocalBackend, ProcessLimits
 # Case, ExperimentSpec, TaskSpec and Variant moved to manifest.py; core re-exports them.
 from harness_workbench.experiments.manifest import Case, ExperimentSpec, TaskSpec, Variant  # noqa: F401
-from harness_workbench.experiments.manifest import digest_path as _digest
+from harness_workbench.experiments.grader import SnapshotLimits, digest_path as _digest, evaluate_bundle
+from harness_workbench.experiments.status import USABLE_EVALUATION
 from harness_workbench.experiments.report import render_html
 
 
@@ -75,7 +76,8 @@ def _observed(executor: Any, variant: Variant, case: Case, context: RunContext) 
     return executor.execute(variant.harness, case.task)
 
 
-def _one(executor: Any, variant: Variant, case: Case, run_context: RunContext) -> RunRecord:
+def _one(executor: Any, variant: Variant, case: Case, run_context: RunContext,
+         backend: ExecutionBackend, limits: ProcessLimits) -> RunRecord:
     workspace: Path | None = run_context.workspace
     before: str | None = None
     after: str | None = None
@@ -99,14 +101,18 @@ def _one(executor: Any, variant: Variant, case: Case, run_context: RunContext) -
         if not isinstance(report, BehavioralReport):
             raise TypeError("executor must return a BehavioralReport")
         outputs = dict(report.outputs)
-        checks = evaluate_checks(case.checks, outputs, workspace)
+        evaluation = evaluate_bundle(
+            case.bundle, outputs, workspace, backend=backend, limits=limits,
+            snapshot_limits=SnapshotLimits(limits.max_files, limits.max_total_bytes),
+            trial_id=run_context.run_id,
+        )
+        checks = evaluation.checks
         after = _digest(workspace) if workspace else None
-        total = sum(float(check["weight"]) for check in checks)
-        earned = sum(float(check["weight"]) for check in checks if check["passed"])
-        score = earned / total if total else 0.0
+        score = evaluation.score if evaluation.score is not None else 0.0
+        usable = evaluation.status in USABLE_EVALUATION
         return RunRecord(
             run_context.run_id, variant.id, case.id, run_context.repetition,
-            run_context.seed, round(score, 6), bool(checks), bool(checks) and earned == total,
+            run_context.seed, round(score, 6), usable, evaluation.status.value == "passed",
             checks, report.score, report.cost_tokens, report.latency_ms,
             list(report.failures), outputs, before, after,
         )
@@ -254,6 +260,9 @@ def run_experiment(spec: ExperimentSpec, executor: Any, root: str | Path) -> dic
     experiment_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S") + "-" + uuid.uuid4().hex[:12]
     out_dir = destination / "experiments" / experiment_id
     out_dir.mkdir(parents=True, exist_ok=False)
+    # Interim: trusted local execution until the supervisor selects a backend per environment mode.
+    backend = LocalBackend()
+    limits = ProcessLimits.from_config(spec.environment.limits)
     records: list[RunRecord] = []
     for case in spec.cases:
         for repetition in range(spec.repetitions):
@@ -266,7 +275,7 @@ def run_experiment(spec: ExperimentSpec, executor: Any, root: str | Path) -> dic
                 run_id = uuid.uuid4().hex
                 with tempfile.TemporaryDirectory(prefix="harness-experiment-") as temp:
                     context = RunContext(experiment_id, run_id, case.id, variant.id, repetition, seed, Path(temp) / "workspace")
-                    records.append(_one(executor, variant, case, context))
+                    records.append(_one(executor, variant, case, context, backend, limits))
     summary = compare(spec, records)
     payload = {
         "experiment_id": experiment_id,

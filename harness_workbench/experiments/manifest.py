@@ -20,6 +20,7 @@ from typing import Any
 
 from harness_workbench.core.executor import Task
 from harness_workbench.core.harness import ALL_COMPONENTS, Harness, load_harness
+from harness_workbench.experiments.grader import GraderBundle, digest_path
 from harness_workbench.experiments.status import Provenance
 from harness_workbench.experiments.validation import (
     ValidationError,
@@ -70,24 +71,6 @@ class Split(str, Enum):
 
 
 # --- small helpers -------------------------------------------------------------
-
-
-def digest_path(path: Path) -> str:
-    """Content fingerprint including names, permissions and symlink targets."""
-    h = hashlib.sha256()
-    if path.is_file():
-        h.update(path.read_bytes())
-        return h.hexdigest()
-    for item in sorted(path.rglob("*")):
-        rel = item.relative_to(path).as_posix()
-        h.update(rel.encode("utf-8"))
-        if item.is_symlink():
-            h.update(b"SYMLINK")
-            h.update(os.readlink(item).encode("utf-8"))
-        elif item.is_file():
-            h.update(item.read_bytes())
-            h.update(str(item.stat().st_mode & 0o777).encode("ascii"))
-    return h.hexdigest()
 
 
 def _sha(text: str) -> str:
@@ -326,6 +309,7 @@ class TaskSpec:
     checks: tuple[dict[str, Any], ...]
     grader_files: Path | None
     bundle_hash: str
+    bundle: GraderBundle
     fixture: Path | None
     fixture_hash: str | None
     content_fingerprint: str
@@ -348,19 +332,6 @@ class Variant:
     def __post_init__(self) -> None:
         if not self.config_hash:
             _set(self, config_hash=self.harness.execution_config_hash())
-
-
-def _bundle_fingerprint(checks: tuple[dict[str, Any], ...], files_dir: Path | None) -> str:
-    """sha256 over the canonical checks JSON and the sorted names and bytes of the grader files."""
-    h = hashlib.sha256()
-    h.update(json_dumps_strict(list(checks), sort_keys=True, separators=(",", ":")).encode("utf-8"))
-    if files_dir is not None:
-        for item in sorted(path for path in files_dir.rglob("*") if path.is_file()):
-            name = item.relative_to(files_dir).as_posix().encode("utf-8")
-            data = item.read_bytes()
-            h.update(b"\0F" + str(len(name)).encode("ascii") + b":" + name)
-            h.update(str(len(data)).encode("ascii") + b":" + data)
-    return h.hexdigest()
 
 
 def _content_fingerprint(task: Task, fixture_hash: str | None, bundle_hash: str) -> str:
@@ -488,7 +459,8 @@ def _task_spec(item: Any, base: Path, *, legacy: bool) -> TaskSpec:
         task_id=task_id, constraints=list(_string_list(f"{where} constraints", constraints)),
     )
     fixture_hash = digest_path(fixture) if fixture else None
-    bundle_hash = _bundle_fingerprint(checks, grader_files)
+    bundle = GraderBundle.build(task_id, checks, grader_files)
+    bundle_hash = bundle.hash
     split: Split | None = None
     family = task_id
     runs: bool | None = False
@@ -507,7 +479,7 @@ def _task_spec(item: Any, base: Path, *, legacy: bool) -> TaskSpec:
             runs = _flag(f"{where} runs_candidate_code", runs)
         controls = _controls(item.get("controls"), base, task_id)
     return TaskSpec(
-        task_id, task, split, family, checks, grader_files, bundle_hash, fixture, fixture_hash,
+        task_id, task, split, family, checks, grader_files, bundle_hash, bundle, fixture, fixture_hash,
         _content_fingerprint(task, fixture_hash, bundle_hash), runs, controls, _critical_ids(checks),
     )
 

@@ -30,9 +30,12 @@ from harness_workbench.core.executor import BehavioralReport, MockExecutor, Task
 from harness_workbench.core.harness import Harness, load_harness
 from harness_workbench.core.improver import Improver
 from harness_workbench.experiments import ExperimentSpec, RunContext, run_experiment
+from harness_workbench.experiments.backends import LocalBackend, ProcessLimits
 from harness_workbench.experiments.checks import evaluate_checks
 from harness_workbench.experiments.command import CommandHarnessExecutor
+from harness_workbench.experiments.grader import GraderBundle, SnapshotLimits, evaluate_bundle
 from harness_workbench.experiments.manifest import ManifestError
+from harness_workbench.experiments.status import EvaluationStatus
 from tests.support import ENV_CANARY, ScriptedExecutor, SimulatedCrash, exact_task, repro, write_manifest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -56,16 +59,25 @@ def _command_run(root: Path, code: str, timeout: float = 30) -> BehavioralReport
 
 
 class A01GraderIntegrity(TempDirCase):
-    @repro
     def test_rewritten_check_script_still_fails(self) -> None:
         """A1: the verifier lives in the solver's workspace, so a solver can rewrite a failing check to pass."""
         workspace = self.root / "workspace"
         workspace.mkdir()
         (workspace / "check.py").write_text("import sys; sys.exit(1)\n", encoding="utf-8")
-        chk = [{"id": "c", "type": "command", "argv": [sys.executable, "check.py"]}]
-        self.assertFalse(evaluate_checks(chk, {}, workspace)[0]["passed"], "precondition: grader fails untampered")
+        bundle_src = self.root / "graders"
+        bundle_src.mkdir()
+        (bundle_src / "check.py").write_text("import sys; sys.exit(1)\n", encoding="utf-8")
+        chk = [{"id": "c", "type": "command", "argv": ["{python}", "-I", "check.py"]}]
+        bundle = GraderBundle.build("t1", chk, bundle_src)
+
+        def evaluate():
+            return evaluate_bundle(bundle, {}, workspace, backend=LocalBackend(),
+                                   limits=ProcessLimits(timeout_seconds=30),
+                                   snapshot_limits=SnapshotLimits(100, 1_000_000), trial_id="trial")
+
+        self.assertEqual(evaluate().status, EvaluationStatus.FAILED, "precondition: grader fails untampered")
         (workspace / "check.py").write_text("pass\n", encoding="utf-8")  # the "solver" rewrites the grader
-        self.assertFalse(evaluate_checks(chk, {}, workspace)[0]["passed"])
+        self.assertEqual(evaluate().status, EvaluationStatus.FAILED)
 
     @repro
     def test_shadowed_unittest_module_cannot_pass(self) -> None:
@@ -127,16 +139,14 @@ class A04UsageGates(TempDirCase):
 
 
 class A05GraderErrors(TempDirCase):
-    @repro
     def test_missing_grader_is_not_verified(self) -> None:
         """A5: a grader infrastructure error counts as a quality failure and the run is still 'verified'."""
-        task = exact_task("t1")
-        task["checks"] = [{"id": "g", "type": "command", "argv": ["/nonexistent/grader"]}]
-        manifest = write_manifest(self.root / "m", tasks=[task],
-                                  variants=[{"id": "candidate", "system_prompt": "cand"}])
-        executor = ScriptedExecutor({"base": lambda t: True, "cand": lambda t: True})
-        result = run_experiment(ExperimentSpec.load(manifest), executor, self.root / "out")
-        self.assertFalse(result["runs"][0]["verified"])
+        bundle = GraderBundle.build("t1", [{"id": "g", "type": "command", "argv": ["/nonexistent/grader"]}], None)
+        result = evaluate_bundle(bundle, {"answer": "CORRECT"}, None, backend=LocalBackend(),
+                                 limits=ProcessLimits(timeout_seconds=30),
+                                 snapshot_limits=SnapshotLimits(100, 1_000_000), trial_id="trial")
+        self.assertEqual(result.status, EvaluationStatus.EVALUATION_ERROR)
+        self.assertIsNone(result.score)
 
 
 class A06StrictValues(TempDirCase):

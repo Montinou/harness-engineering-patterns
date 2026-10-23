@@ -13,7 +13,9 @@ from harness_workbench.core.improver import Improver
 from harness_workbench.core.proposer import RuleBasedProposer
 from harness_workbench.core.store import load_versions
 from harness_workbench.experiments import ExperimentSpec, run_experiment
+from harness_workbench.experiments.backends import LocalBackend, ProcessLimits
 from harness_workbench.experiments.checks import evaluate_checks
+from harness_workbench.experiments.grader import EvaluationEnvironment
 
 
 class FakeCaseExecutor:
@@ -122,14 +124,26 @@ class ExperimentTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ExperimentSpec.load(path)
 
+    def evaluation_environment(self) -> EvaluationEnvironment:
+        """The fixture is the artifact; the command's cwd is the (here empty) bundle directory."""
+        dirs = {name: self.root / "eval" / name for name in ("bundle", "out", "home", "tmp")}
+        for path in dirs.values():
+            path.mkdir(parents=True, exist_ok=True)
+        return EvaluationEnvironment(self.fixture, dirs["bundle"], dirs["out"], dirs["home"], dirs["tmp"],
+                                     LocalBackend(), ProcessLimits(timeout_seconds=30))
+
     def test_checks_cannot_read_outside_workspace(self) -> None:
         check = {"type": "file_exists", "path": "../secret.txt"}
-        self.assertFalse(evaluate_checks([check], {}, self.fixture)[0]["passed"])
+        result = evaluate_checks([check], {}, self.evaluation_environment())[0]
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["status"], "error")
 
     def test_command_verifier_runs_in_fixture(self) -> None:
+        # Expectation change (T7): the command's cwd is the grader bundle; the fixture is {artifact}.
+        code = "import sys; from pathlib import Path; assert Path(sys.argv[1], 'seed.txt').read_text() == 'original'"
         result = evaluate_checks(
-            [{"type": "command", "argv": [sys.executable, "-c", "from pathlib import Path; assert Path('seed.txt').read_text() == 'original'"]}],
-            {}, self.fixture,
+            [{"type": "command", "argv": ["{python}", "-I", "-c", code, "{artifact}"]}],
+            {}, self.evaluation_environment(),
         )
         self.assertTrue(result[0]["passed"])
 
