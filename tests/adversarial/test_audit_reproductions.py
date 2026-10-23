@@ -8,7 +8,9 @@ fix lands, which is the cue to drop the decorator. Run with
 assertion failures.
 
 Coverage: sixteen reproductions for A1-A7, A9, A10 and A12 (the two A06 tests are undecorated since T5;
-the A01 shadowing test is undecorated since T8 and runs through ``evaluate_bundle``).
+the A01 shadowing test is undecorated since T8 and runs through ``evaluate_bundle``;
+the A04 latency, both A10 and the A12 output-limit tests are undecorated since T9, the grader one runs
+through ``evaluate_bundle``).
  * A8 (low statistical power) has no unit reproduction; it is recreated as a
    statistical simulation in T24.
  * A11 (``test_improve_cli_can_require_experiment_validation`` fails outside CI
@@ -32,7 +34,6 @@ from harness_workbench.core.harness import Harness, load_harness
 from harness_workbench.core.improver import Improver
 from harness_workbench.experiments import ExperimentSpec, RunContext, run_experiment
 from harness_workbench.experiments.backends import LocalBackend, ProcessLimits
-from harness_workbench.experiments.checks import evaluate_checks
 from harness_workbench.experiments.command import CommandHarnessExecutor
 from harness_workbench.experiments.grader import GraderBundle, SnapshotLimits, evaluate_bundle
 from harness_workbench.experiments.manifest import ManifestError
@@ -135,7 +136,6 @@ class A04UsageGates(TempDirCase):
         decision = result["summary"]["contrasts"]["candidate"]
         self.assertFalse(decision["eligible"])
 
-    @repro
     def test_adapter_latency_is_not_authoritative(self) -> None:
         """A4: the command agent self-reports latency (command.py:99), so a slow command can report zero."""
         code = ("import os, json, time; time.sleep(0.3); "
@@ -244,7 +244,6 @@ class A09HoldoutReuse(TempDirCase):
 
 
 class A10EnvironmentSecrets(TempDirCase):
-    @repro
     def test_solver_does_not_inherit_parent_canary(self) -> None:
         """A10: the full parent environment is inherited by the agent command."""
         # Report only the canary variable, never the whole environment: a failing assertion must not print secrets.
@@ -254,19 +253,26 @@ class A10EnvironmentSecrets(TempDirCase):
             report = _command_run(self.root, code)
         self.assertNotIn(ENV_CANARY, report.outputs["answer"])
 
-    @repro
     def test_grader_does_not_inherit_parent_canary(self) -> None:
-        """A10: graders inherit the full parent environment too."""
+        """A10 (fixed in T9): graders run with the minimal environment, so the parent canary is absent."""
         workspace = self.root / "ws"
         workspace.mkdir()
-        argv = [sys.executable, "-c", "import os,sys; sys.exit(0 if 'HARNESS_TEST_CANARY' in os.environ else 1)"]
+        probe = "import os, sys; sys.exit(%s)"
+
+        def evaluate(exit_code: str):
+            checks = [{"id": "env", "type": "command", "argv": ["{python}", "-I", "-c", probe % exit_code]}]
+            return evaluate_bundle(GraderBundle.build("t1", checks, None), {}, workspace, backend=LocalBackend(),
+                                   limits=ProcessLimits(timeout_seconds=30),
+                                   snapshot_limits=SnapshotLimits(100, 1_000_000), trial_id="trial")
+
         with mock.patch.dict(os.environ, {"HARNESS_TEST_CANARY": ENV_CANARY}):
-            passed = evaluate_checks([{"type": "command", "argv": argv}], {}, workspace)[0]["passed"]
-        self.assertFalse(passed)
+            # Precondition: the probe passes when the canary is absent, so FAILED below means "present".
+            self.assertEqual(evaluate("1 if 'HARNESS_TEST_CANARY' in os.environ else 0").status, EvaluationStatus.PASSED)
+            # The original reproduction's check: exit 0 only if the canary is visible.
+            self.assertEqual(evaluate("0 if 'HARNESS_TEST_CANARY' in os.environ else 1").status, EvaluationStatus.FAILED)
 
 
 class A12Traceability(TempDirCase):
-    @repro
     def test_unbounded_solver_output_is_limited(self) -> None:
         """A12: capture_output=True has no size cap; a 20 MB stdout is held whole in the record."""
         record = _command_run(self.root, "import sys; sys.stdout.write('x' * 20_000_000)")

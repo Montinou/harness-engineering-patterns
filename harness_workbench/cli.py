@@ -234,7 +234,7 @@ def _cmd_improve(args: argparse.Namespace) -> int:
         validation_spec = ExperimentSpec.load(args.validation_spec)
         if validation_spec.executor_config.get("type") == "command":
             from harness_workbench.experiments.command import CommandHarnessExecutor
-            validation_executor = CommandHarnessExecutor.from_config(validation_spec.executor_config)
+            validation_executor = CommandHarnessExecutor.from_config(validation_spec.executor, validation_spec.environment)
         else:
             validation_executor = executor
 
@@ -287,7 +287,7 @@ def _cmd_experiment(args: argparse.Namespace) -> int:
     spec = ExperimentSpec.load(args.spec)
     if args.provider == "command":
         from harness_workbench.experiments.command import CommandHarnessExecutor
-        executor = CommandHarnessExecutor.from_config(spec.executor_config)
+        executor = CommandHarnessExecutor.from_config(spec.executor, spec.environment)
     else:
         _proposer, executor = _backend(args)
     result = run_experiment(spec, executor, args.root)

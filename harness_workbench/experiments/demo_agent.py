@@ -1,4 +1,7 @@
-"""Synthetic, deterministic example agent; NOT a real LLM or benchmark result."""
+"""Synthetic, deterministic example agent; NOT a real LLM or benchmark result.
+
+It reads only the public harness components the adapter hands it (HARNESS_SPEC_FILE).
+"""
 import json
 import os
 from pathlib import Path
@@ -10,6 +13,7 @@ if success:
     (workspace / "report.txt").write_text("PASS", encoding="utf-8")
 result = {
     "outputs": {"answer": "CORRECT" if success else "INCORRECT"},
+    "model": "synthetic-fixture-agent",
     "tokens": 10, "behavioral_score": 0.2 if success else 0.9,
 }
 Path(os.environ["HARNESS_RESULT_FILE"]).write_text(json.dumps(result), encoding="utf-8")
