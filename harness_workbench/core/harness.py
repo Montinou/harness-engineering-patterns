@@ -8,11 +8,24 @@ lessons that justified the change.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import asdict, dataclass, field, fields, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+# The eight executable components. Everything else on a Harness is administrative.
+ALL_COMPONENTS = (
+    "system_prompt",
+    "guardrails",
+    "memory_config",
+    "tools",
+    "subagents",
+    "skills",
+    "scripts",
+    "plugins",
+)
 
 
 def utc_now() -> str:
@@ -134,6 +147,25 @@ class Harness:
 
     def to_json(self, *, indent: int = 2) -> str:
         return json.dumps(self.to_dict(), indent=indent, ensure_ascii=False) + "\n"
+
+    def public_components(self) -> dict[str, Any]:
+        """The eight executable components as plain data (no id, version, name, notes, lineage)."""
+        data = self.to_dict()
+        return {name: data[name] for name in ALL_COMPONENTS}
+
+    def execution_config_hash(self) -> str:
+        """sha256 of the executable components only; ignores identity, notes and lineage."""
+        # Imported here: harness_workbench.experiments.__init__ imports core.harness,
+        # so a module-level import would be circular.
+        from harness_workbench.experiments.validation import json_dumps_strict
+
+        canonical = json_dumps_strict(self.public_components(), sort_keys=True)
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    def descriptor(self) -> dict[str, Any]:
+        """Administrative fields that do not change how the harness executes."""
+        data = self.to_dict()
+        return {key: data[key] for key in ("id", "version", "name", "domain", "notes", "lineage")}
 
     def tool_names(self) -> set[str]:
         return {tool.name for tool in self.tools}
