@@ -451,6 +451,13 @@ class ExperimentDecision:
         if self.lower_bound is not None:
             self.lower_bound = require_finite("lower_bound", self.lower_bound)
         require_int("n_units", self.n_units, minimum=0)
+        if self.status is DecisionStatus.ELIGIBLE:
+            # An eligible decision is what promotion relies on: it must name the candidate it approves
+            # and the evidence it rests on, whichever way the object was built (constructor or from_dict).
+            if not isinstance(self.candidate_hash, str) or not self.candidate_hash:
+                raise ValidationError("an eligible decision requires a candidate_hash")
+            if not self.evidence_ids:
+                raise ValidationError("an eligible decision requires evidence_ids")
 
     def to_dict(self) -> dict[str, Any]:
         data = {
