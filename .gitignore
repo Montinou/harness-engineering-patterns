@@ -7,3 +7,5 @@ dist/
 build/
 runs/*
 !runs/.gitkeep
+.env
+.env.*
