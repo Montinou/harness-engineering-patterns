@@ -123,8 +123,9 @@ class CapabilityTests(unittest.TestCase):
 
     def test_build_backend(self):
         self.assertIsInstance(build_backend(EnvironmentConfig(mode="trusted_local")), LocalBackend)
-        with self.assertRaisesRegex(BackendUnavailable, "sandboxed backend not implemented"):
-            build_backend(EnvironmentConfig(mode="sandboxed"))
+        with tempfile.TemporaryDirectory() as empty, mock.patch.dict(os.environ, {"PATH": empty}):
+            with self.assertRaisesRegex(BackendUnavailable, "docker daemon unavailable"):
+                build_backend(EnvironmentConfig(mode="sandboxed"))
 
     def test_mounts_defaults(self):
         self.assertEqual(Mounts(), Mounts((), ()))

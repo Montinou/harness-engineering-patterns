@@ -18,9 +18,11 @@ import signal
 import select
 import subprocess
 import sys
+import tempfile
 import threading
 import time
-from dataclasses import dataclass, fields
+import uuid
+from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from typing import Protocol, Sequence
 
@@ -28,9 +30,9 @@ from .manifest import EnvironmentConfig, ProcessLimitsConfig
 from .status import ExecutionStatus
 
 __all__ = [
-    "BackendCapabilities", "BackendUnavailable", "ExecutionBackend", "GRADER_FORBIDDEN_PASSTHROUGH",
-    "LocalBackend", "Mounts", "NO_GUARANTEES", "ProcessLimits", "ProcessOutcome", "SANDBOX_REQUIRED",
-    "build_backend", "grader_env", "minimal_env",
+    "BackendCapabilities", "BackendUnavailable", "DockerBackend", "ExecutionBackend",
+    "GRADER_FORBIDDEN_PASSTHROUGH", "LocalBackend", "Mounts", "NO_GUARANTEES", "ProcessLimits",
+    "ProcessOutcome", "SANDBOX_REQUIRED", "build_backend", "grader_env", "minimal_env", "require_backend",
 ]
 
 _READ_CHUNK = 65536
@@ -263,9 +265,245 @@ class LocalBackend:
         )
 
 
-def build_backend(environment: EnvironmentConfig) -> ExecutionBackend:
+_DOCKER_CLIENT_ENV = (
+    "PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "XDG_RUNTIME_DIR",
+    "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG", "DOCKER_CERT_PATH", "DOCKER_TLS_VERIFY",
+)
+_INFO_TIMEOUT_SECONDS = 15.0
+_SELF_TEST_TIMEOUT_SECONDS = 120.0  # the first run may have to pull the image
+_CONTROL_TIMEOUT_SECONDS = 60.0
+_CONTROL_OUTPUT_BYTES = 65536
+_SANDBOX_USER = "65534:65534"
+_SELF_TEST_OK = "HARNESS_SANDBOX_OK"
+_SELF_TEST_FAIL = "HARNESS_SANDBOX_FAIL"
+_MOUNT_ROOT = "/sandbox"
+_DOCKER_RUN_ERROR = 125  # docker run itself failed (daemon, name conflict, mount rejected, lost mid-run)
+_DOCKER_EXEC_ERRORS = (126, 127)  # docker could not exec the command; solver exits look the same
+_DOCKER_STDERR_PREFIXES = ("docker:", "exec:")
+
+# Runs inside the container. Each failed property is printed by name; the OK marker is
+# required, so a container that never ran the script cannot pass the self-test.
+_SELF_TEST_SCRIPT = f"""
+import errno, os, sys, urllib.request
+failed = []
+if os.getuid() != 65534:
+    failed.append("unprivileged_user")
+try:
+    urllib.request.urlopen("http://example.com", timeout=3)
+    failed.append("network_denied")
+except Exception:
+    pass
+if os.path.exists("/var/run/docker.sock") or os.path.exists("/run/docker.sock"):
+    failed.append("no_docker_socket")
+try:
+    open("{_MOUNT_ROOT}/0/.sandbox_probe", "w").close()
+    failed.append("read_only_bundle")
+except OSError as exc:
+    if exc.errno != errno.EROFS:
+        failed.append("read_only_bundle")
+try:
+    open("/.sandbox_probe", "w").close()
+    failed.append("isolated_filesystem")
+except OSError as exc:
+    if exc.errno != errno.EROFS:
+        failed.append("isolated_filesystem")
+if os.getpid() == 1:
+    failed.append("process_containment")
+for name in failed:
+    print("{_SELF_TEST_FAIL} " + name)
+if not failed:
+    print("{_SELF_TEST_OK}")
+sys.exit(1 if failed else 0)
+"""
+
+
+class DockerBackend:
+    """Candidate code in a locked-down container, or an explicit refusal.
+
+    ``probe`` must succeed before ``capabilities`` or ``run`` are usable; there is no
+    degraded mode and nothing here ever falls back to ``LocalBackend`` for the task itself.
+    """
+
+    name = "sandboxed"
+
+    def __init__(self, image: str, python: str, docker: str = "docker", memory: str = "512m",
+                 pids_limit: int = 256) -> None:
+        self.image = image
+        self.python = python
+        self.docker = docker
+        self.memory = memory
+        self.pids_limit = pids_limit
+        self._probed = False
+
+    # -- docker client plumbing -------------------------------------------------
+
+    @staticmethod
+    def _client_env() -> dict[str, str]:
+        return {name: os.environ[name] for name in _DOCKER_CLIENT_ENV if name in os.environ}
+
+    def _control(self, argv: list[str], timeout: float) -> ProcessOutcome:
+        return LocalBackend().run(
+            argv, cwd=Path(tempfile.gettempdir()), env=self._client_env(),
+            limits=ProcessLimits(timeout_seconds=timeout, max_output_bytes=_CONTROL_OUTPUT_BYTES),
+            mounts=Mounts())
+
+    @staticmethod
+    def _detail(outcome: ProcessOutcome) -> str:
+        text = (outcome.error or outcome.stderr or outcome.stdout or "").strip()
+        return " ".join(text.split())[:300] or f"status {outcome.status.value}"
+
+    def _remove_container(self, name: str) -> None:
+        self._control([self.docker, "rm", "-f", name], _CONTROL_TIMEOUT_SECONDS)
+
+    # -- command line -----------------------------------------------------------
+
+    def command_line(self, argv: list[str], cwd: Path, env: dict[str, str], limits: ProcessLimits,
+                     mounts: Mounts, name: str | None = None) -> list[str]:
+        """The full ``docker run`` argv. Pure: no Docker, no filesystem writes."""
+        entries: list[tuple[Path, str, str]] = []
+        for host in mounts.read_only:
+            entries.append((Path(host), f"{_MOUNT_ROOT}/{len(entries)}", "ro"))
+        for host in mounts.writable:
+            entries.append((Path(host), f"{_MOUNT_ROOT}/{len(entries)}", "rw"))
+        forms: dict[str, str] = {}
+        volumes: list[str] = []
+        for host, point, mode in entries:
+            resolved = str(host.resolve())
+            for form in (os.path.abspath(host), resolved):
+                if any(ch in form for ch in ":\n"):
+                    raise ValueError(f"mount path {form!r} cannot be passed to docker -v")
+                forms[form] = point
+            volumes += ["-v", f"{resolved}:{point}:{mode}"]
+        if forms:
+            alternatives = "|".join(re.escape(form) for form in sorted(forms, key=len, reverse=True))
+            pattern = re.compile(rf"(?<![\w.\-/])(?:{alternatives})(?![\w.\-])")
+        else:
+            pattern = None
+
+        def rewrite(text: str) -> str:
+            return pattern.sub(lambda match: forms[match.group(0)], text) if pattern else text
+
+        workdir = rewrite(os.path.abspath(cwd))
+        if not workdir.startswith(f"{_MOUNT_ROOT}/"):
+            raise ValueError(f"cwd {str(cwd)!r} is not under any mount")
+        line = [
+            self.docker, "run", "--rm", "--init", "--name", name or f"hw-run-{uuid.uuid4().hex}",
+            "--network", "none", "--user", _SANDBOX_USER, "--cap-drop", "ALL",
+            "--security-opt", "no-new-privileges", "--pids-limit", str(self.pids_limit),
+            "--memory", self.memory, "--read-only", "--tmpfs", "/tmp:rw,size=256m",
+            *volumes, "-w", workdir,
+        ]
+        for key, value in env.items():
+            if key == "PATH":
+                # minimal_env copies the host PATH; forwarding it would override the image's own
+                # PATH, make solver behavior depend on the host and leak the host layout. Dropping
+                # it lets the image default apply (the self-test already runs that way).
+                continue
+            line += ["-e", f"{key}={rewrite(value)}"]
+        line.append(self.image)
+        line += [rewrite(arg) for arg in argv]
+        return line
+
+    # -- capability self-test ---------------------------------------------------
+
+    def probe(self) -> None:
+        """Verify the daemon and the isolation properties; raise ``BackendUnavailable`` on any failure."""
+        self._probed = False
+        info = self._control([self.docker, "info", "--format", "{{.ServerVersion}}"], _INFO_TIMEOUT_SECONDS)
+        if info.status is not ExecutionStatus.COMPLETED or not info.stdout.strip():
+            raise BackendUnavailable(f"docker daemon unavailable: {self._detail(info)}")
+        with tempfile.TemporaryDirectory(prefix="hw-selftest-") as tmp:
+            probe_dir = Path(tmp)
+            probe_dir.chmod(0o777)  # only the read-only mount, not file modes, may stop the write
+            name = f"hw-selftest-{uuid.uuid4().hex}"
+            line = self.command_line(
+                [self.python, "-c", _SELF_TEST_SCRIPT], cwd=probe_dir, env={},
+                limits=ProcessLimits(timeout_seconds=_SELF_TEST_TIMEOUT_SECONDS),
+                mounts=Mounts(read_only=(probe_dir,)), name=name)
+            outcome = self._control(line, _SELF_TEST_TIMEOUT_SECONDS)
+            if outcome.status in (ExecutionStatus.TIMEOUT, ExecutionStatus.RESOURCE_LIMIT):
+                self._remove_container(name)
+        failed = [row.split(None, 1)[1].strip() for row in outcome.stdout.splitlines()
+                  if row.startswith(_SELF_TEST_FAIL + " ")]
+        if failed:
+            raise BackendUnavailable(f"sandbox self-test failed: {', '.join(failed)}")
+        if outcome.status is not ExecutionStatus.COMPLETED or _SELF_TEST_OK not in outcome.stdout:
+            raise BackendUnavailable(
+                f"sandbox self-test did not complete (exit {outcome.exit_code}): {self._detail(outcome)}")
+        self._probed = True
+
+    def capabilities(self) -> BackendCapabilities:
+        if not self._probed:
+            raise BackendUnavailable("sandbox capabilities are unknown until probe() succeeds")
+        return SANDBOX_REQUIRED
+
+    def image_digest(self) -> str | None:
+        outcome = self._control(
+            [self.docker, "image", "inspect", "--format", "{{index .RepoDigests 0}}", self.image],
+            _CONTROL_TIMEOUT_SECONDS)
+        digest = outcome.stdout.strip()
+        return digest if outcome.status is ExecutionStatus.COMPLETED and digest else None
+
+    # -- execution --------------------------------------------------------------
+
+    def run(self, argv: list[str], *, cwd: Path, env: dict[str, str],
+            limits: ProcessLimits, mounts: Mounts) -> ProcessOutcome:
+        if not self._probed:
+            raise BackendUnavailable("sandbox backend used before a successful probe()")
+        try:
+            for path in mounts.writable:
+                os.chmod(path, 0o777)  # uid 65534 must be able to write into host-owned dirs
+        except OSError as exc:
+            return ProcessOutcome(
+                status=ExecutionStatus.EXECUTION_ERROR, exit_code=None, stdout="", stderr="",
+                duration_ms=0.0, truncated=False,
+                error=f"could not prepare writable mount: {type(exc).__name__}: {exc}")
+        name = f"hw-run-{uuid.uuid4().hex}"
+        line = self.command_line(argv, cwd, env, limits, mounts, name=name)
+        outcome = LocalBackend().run(line, cwd=cwd, env=self._client_env(), limits=limits, mounts=Mounts())
+        if outcome.status in (ExecutionStatus.TIMEOUT, ExecutionStatus.RESOURCE_LIMIT):
+            self._remove_container(name)
+        return self._classify_docker_failure(outcome)
+
+    @staticmethod
+    def _classify_docker_failure(outcome: ProcessOutcome) -> ProcessOutcome:
+        """Docker's own failures are infrastructure errors, never a scoreable solver failure."""
+        if outcome.status is not ExecutionStatus.TASK_FAILURE:
+            return outcome
+        code = outcome.exit_code
+        starts_with_docker = outcome.stderr.lstrip().startswith(_DOCKER_STDERR_PREFIXES)
+        if code == _DOCKER_RUN_ERROR or (code in _DOCKER_EXEC_ERRORS and starts_with_docker):
+            detail = " ".join(outcome.stderr.split())[:300] or "no stderr"
+            return replace(
+                outcome, status=ExecutionStatus.EXECUTION_ERROR, retryable=True,
+                error=(f"docker infrastructure failure (exit {code}), not a solver result: {detail}"))
+        return outcome
+
+    def cleanup(self, paths: Sequence[Path]) -> bool:
+        """Make files created by uid 65534 removable by the host user. True when every path succeeded."""
+        ok = True
+        for path in paths:
+            outcome = self._control(
+                [self.docker, "run", "--rm", "--network", "none", "--user", "0",
+                 "-v", f"{Path(path).resolve()}:/x", self.image, "chmod", "-R", "a+rwX", "/x"],
+                _CONTROL_TIMEOUT_SECONDS)
+            ok = ok and outcome.status is ExecutionStatus.COMPLETED
+        return ok
+
+
+def require_backend(environment: EnvironmentConfig) -> ExecutionBackend:
+    """The backend the manifest asks for, or ``BackendUnavailable``. Never degrades to local."""
     if environment.mode == "trusted_local":
         return LocalBackend()
     if environment.mode == "sandboxed":
-        raise BackendUnavailable("sandboxed backend not implemented")
+        backend = DockerBackend(environment.image, environment.image_python)
+        backend.probe()
+        missing = backend.capabilities().missing(SANDBOX_REQUIRED)
+        if missing:
+            raise BackendUnavailable(f"sandboxed backend lacks required capabilities: {', '.join(missing)}")
+        return backend
     raise BackendUnavailable(f"unknown environment mode {environment.mode!r}")
+
+
+def build_backend(environment: EnvironmentConfig) -> ExecutionBackend:
+    return require_backend(environment)
