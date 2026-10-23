@@ -7,7 +7,8 @@ fix lands, which is the cue to drop the decorator. Run with
 ``HARNESS_REPRO_STRICT=1`` to execute them undecorated and read the real
 assertion failures.
 
-Coverage: sixteen reproductions for A1-A7, A9, A10 and A12 (the two A06 tests are undecorated since T5).
+Coverage: sixteen reproductions for A1-A7, A9, A10 and A12 (the two A06 tests are undecorated since T5;
+the A01 shadowing test is undecorated since T8 and runs through ``evaluate_bundle``).
  * A8 (low statistical power) has no unit reproduction; it is recreated as a
    statistical simulation in T24.
  * A11 (``test_improve_cli_can_require_experiment_validation`` fails outside CI
@@ -79,15 +80,20 @@ class A01GraderIntegrity(TempDirCase):
         (workspace / "check.py").write_text("pass\n", encoding="utf-8")  # the "solver" rewrites the grader
         self.assertEqual(evaluate().status, EvaluationStatus.FAILED)
 
-    @repro
     def test_shadowed_unittest_module_cannot_pass(self) -> None:
         """A1: a command check run in the solver's workspace imports solver-controlled modules."""
         workspace = self.root / "workspace"
         workspace.mkdir()
         (workspace / "unittest.py").write_text("import sys; sys.exit(0)\n", encoding="utf-8")
         (workspace / "run_tests.py").write_text("import unittest\nraise SystemExit(1)\n", encoding="utf-8")
-        checks = [{"type": "command", "argv": [sys.executable, "run_tests.py"]}]
-        self.assertFalse(evaluate_checks(checks, {}, workspace)[0]["passed"])
+        bundle_src = self.root / "graders"
+        bundle_src.mkdir()
+        (bundle_src / "run_tests.py").write_text("import unittest\nraise SystemExit(1)\n", encoding="utf-8")
+        checks = [{"id": "tests", "type": "command", "argv": ["{python}", "-I", "run_tests.py"]}]
+        result = evaluate_bundle(GraderBundle.build("t1", checks, bundle_src), {}, workspace,
+                                 backend=LocalBackend(), limits=ProcessLimits(timeout_seconds=30),
+                                 snapshot_limits=SnapshotLimits(100, 1_000_000), trial_id="trial")
+        self.assertEqual(result.status, EvaluationStatus.FAILED)
 
 
 class A02SingleFinalist(TempDirCase):

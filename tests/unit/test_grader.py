@@ -18,8 +18,10 @@ from harness_workbench.experiments.grader import (
     SnapshotLimits,
     digest_path,
     evaluate_bundle,
+    run_controls,
     snapshot_workspace,
 )
+from harness_workbench.experiments.manifest import ControlCase, Controls, TaskSpec
 from harness_workbench.experiments.status import EvaluationStatus
 
 LIMITS = ProcessLimits(timeout_seconds=30)
@@ -452,6 +454,56 @@ class ChecksDirect(GraderCase):
         result = evaluate_checks([check], {}, env)[0]
         self.assertEqual(result["status"], "error")
         self.assertIn("oracle protocol violation", result["detail"])
+
+
+class RunControls(GraderCase):
+    """``run_controls``: the positive control must pass and every negative must fail."""
+
+    def task(self, controls: Controls | None, checks: list[dict] | None = None) -> TaskSpec:
+        from harness_workbench.core.executor import Task
+
+        frozen = checks or [{"id": "answer", "type": "exact", "target": "answer", "value": "CORRECT"}]
+        bundle = GraderBundle.build("t1", frozen, None)
+        return TaskSpec("t1", Task.from_text("controls", task_id="t1"), None, "t1", tuple(frozen), None,
+                        bundle.hash, bundle, None, None, "fingerprint", False, controls, frozenset())
+
+    def controls(self, task: TaskSpec) -> list[str]:
+        return run_controls(task, backend=LocalBackend(), limits=LIMITS, snapshot_limits=SNAPSHOT)
+
+    def test_controls_positive_must_pass_and_negatives_must_fail(self) -> None:
+        good = Controls(ControlCase("pos", {"answer": "CORRECT"}), (ControlCase("neg", {"answer": "WRONG"}),))
+        self.assertEqual(self.controls(self.task(good)), [])
+        leaky_negative = Controls(ControlCase("pos", {"answer": "CORRECT"}),
+                                  (ControlCase("neg-a", {"answer": "WRONG"}), ControlCase("neg-b", {"answer": "CORRECT"})))
+        self.assertEqual(self.controls(self.task(leaky_negative)),
+                         ["control neg-b of task t1: expected failed, got passed"])
+        failing_positive = Controls(ControlCase("pos", {"answer": "WRONG"}), (ControlCase("neg", {"answer": "WRONG"}),))
+        self.assertEqual(self.controls(self.task(failing_positive)),
+                         ["control pos of task t1: expected passed, got failed"])
+
+    def test_control_evaluation_error_is_a_problem(self) -> None:
+        ws = self.workspace({"a.txt": "alpha"})
+        os.symlink("a.txt", ws / "link")  # the snapshot refuses it: the control cannot be evaluated
+        controls = Controls(ControlCase("pos", {"answer": "CORRECT"}),
+                            (ControlCase("neg", {"answer": "WRONG"}, ws),))
+        self.assertEqual(self.controls(self.task(controls)),
+                         ["control neg of task t1: expected failed, got evaluation_error"])
+        broken_positive = Controls(ControlCase("pos", {}, ws), (ControlCase("neg", {"answer": "WRONG"}),))
+        problems = self.controls(self.task(broken_positive))
+        self.assertIn("control pos of task t1: expected passed, got evaluation_error", problems)
+
+    def test_control_artifact_directory_is_the_workspace(self) -> None:
+        good = self.workspace({"result.txt": "42"})
+        bad = self.root / "bad-artifact"
+        bad.mkdir()
+        (bad / "result.txt").write_text("41", encoding="utf-8")
+        checks = [{"id": "f", "type": "file_equals", "path": "result.txt", "value": "42"}]
+        controls = Controls(ControlCase("pos", {}, good), (ControlCase("neg", {}, bad),))
+        self.assertEqual(self.controls(self.task(controls, checks)), [])
+        self.assertEqual((good / "result.txt").read_text(encoding="utf-8"), "42")  # the source is not modified
+
+    def test_task_without_controls_reports_a_problem(self) -> None:
+        self.assertEqual(self.controls(self.task(None)), ["task t1 has no controls"])
 
 
 if __name__ == "__main__":

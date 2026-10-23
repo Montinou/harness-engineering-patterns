@@ -29,10 +29,11 @@ from .validation import json_dumps_strict, require_int
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only; see the import note above
     from .backends import ExecutionBackend, ProcessLimits
+    from .manifest import TaskSpec
 
 __all__ = [
     "EvaluationEnvironment", "GraderBundle", "SnapshotError", "SnapshotLimits", "digest_path",
-    "evaluate_bundle", "snapshot_workspace",
+    "evaluate_bundle", "run_controls", "snapshot_workspace",
 ]
 
 _COPY_CHUNK = 65536
@@ -288,3 +289,32 @@ def evaluate_bundle(
         return EvaluationResult(trial_id, status, bundle.hash, artifact_hash, results, score, None)
     finally:
         _remove_tree(temp)
+
+
+def run_controls(
+    task: "TaskSpec",
+    *,
+    backend: "ExecutionBackend",
+    limits: "ProcessLimits",
+    snapshot_limits: SnapshotLimits,
+) -> list[str]:
+    """Check that the task's grader accepts its positive control and rejects every negative.
+
+    Each control is evaluated through ``evaluate_bundle`` with the control's
+    ``outputs`` and its ``artifact`` directory as the workspace. Returns problem
+    sentences; an empty list means the controls hold. An ``EVALUATION_ERROR`` is a
+    problem for either kind of control.
+    """
+    if task.controls is None:
+        return [f"task {task.id} has no controls"]
+    problems: list[str] = []
+    cases = [(task.controls.positive, EvaluationStatus.PASSED),
+             *((negative, EvaluationStatus.FAILED) for negative in task.controls.negatives)]
+    for case, expected in cases:
+        result = evaluate_bundle(
+            task.bundle, case.outputs, case.artifact, backend=backend, limits=limits,
+            snapshot_limits=snapshot_limits, trial_id=f"control-{task.id}-{case.id}",
+        )
+        if result.status != expected:
+            problems.append(f"control {case.id} of task {task.id}: expected {expected.value}, got {result.status.value}")
+    return problems
