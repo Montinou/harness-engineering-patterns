@@ -1,0 +1,281 @@
+"""Reproductions of the audit findings A1-A12 (run-02, commit 73bcb130).
+
+Every test is decorated ``@repro`` (``tests.support``), so each one is an
+*expected failure* while the defect exists: the default suite stays green, and a
+test that starts passing is reported as an "unexpected success" the moment its
+fix lands, which is the cue to drop the decorator. Run with
+``HARNESS_REPRO_STRICT=1`` to execute them undecorated and read the real
+assertion failures.
+
+Coverage: sixteen reproductions for A1-A7, A9, A10 and A12.
+ * A8 (low statistical power) has no unit reproduction; it is recreated as a
+   statistical simulation in T24.
+ * A11 (``test_improve_cli_can_require_experiment_validation`` fails outside CI
+   because it needs ``python`` on PATH and an importable package) is covered by
+   that pre-existing failing test in ``tests/test_experiments.py``; it is not
+   duplicated here.
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+import tempfile
+import threading
+import unittest
+from pathlib import Path
+from unittest import mock
+
+from harness_workbench.core.executor import BehavioralReport, MockExecutor, Task
+from harness_workbench.core.harness import Harness, load_harness
+from harness_workbench.core.improver import Improver
+from harness_workbench.experiments import ExperimentSpec, RunContext, run_experiment
+from harness_workbench.experiments.checks import evaluate_checks
+from harness_workbench.experiments.command import CommandHarnessExecutor
+from tests.support import ENV_CANARY, ScriptedExecutor, SimulatedCrash, exact_task, repro, write_manifest
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+class TempDirCase(unittest.TestCase):
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+
+
+def _command_context(root: Path) -> RunContext:
+    return RunContext("experiment", "run", "t1", "candidate", 0, 1, root / "work" / "workspace")
+
+
+def _command_run(root: Path, code: str, timeout: float = 30) -> BehavioralReport:
+    executor = CommandHarnessExecutor([sys.executable, "-c", code], timeout)
+    harness = Harness(id="sample", version="1", system_prompt="candidate")
+    return executor.execute_case(harness, Task.from_text("task", task_id="t1"), _command_context(root))
+
+
+class A01GraderIntegrity(TempDirCase):
+    @repro
+    def test_rewritten_check_script_still_fails(self) -> None:
+        """A1: the verifier lives in the solver's workspace, so a solver can rewrite a failing check to pass."""
+        workspace = self.root / "workspace"
+        workspace.mkdir()
+        (workspace / "check.py").write_text("import sys; sys.exit(1)\n", encoding="utf-8")
+        chk = [{"id": "c", "type": "command", "argv": [sys.executable, "check.py"]}]
+        self.assertFalse(evaluate_checks(chk, {}, workspace)[0]["passed"], "precondition: grader fails untampered")
+        (workspace / "check.py").write_text("pass\n", encoding="utf-8")  # the "solver" rewrites the grader
+        self.assertFalse(evaluate_checks(chk, {}, workspace)[0]["passed"])
+
+    @repro
+    def test_shadowed_unittest_module_cannot_pass(self) -> None:
+        """A1: a command check run in the solver's workspace imports solver-controlled modules."""
+        workspace = self.root / "workspace"
+        workspace.mkdir()
+        (workspace / "unittest.py").write_text("import sys; sys.exit(0)\n", encoding="utf-8")
+        (workspace / "run_tests.py").write_text("import unittest\nraise SystemExit(1)\n", encoding="utf-8")
+        checks = [{"type": "command", "argv": [sys.executable, "run_tests.py"]}]
+        self.assertFalse(evaluate_checks(checks, {}, workspace)[0]["passed"])
+
+
+class A02SingleFinalist(TempDirCase):
+    @repro
+    def test_only_one_variant_reaches_validation_tasks(self) -> None:
+        """A2: no held-out split or multiplicity control; every variant is scored on every task and any can win."""
+        names = [f"n{i}" for i in range(5)]
+        tasks = [exact_task(f"d{i}", split="development") for i in (1, 2, 3)]
+        tasks += [exact_task(f"v{i}", split="validation") for i in (1, 2, 3)]
+        manifest = write_manifest(self.root / "m", tasks=tasks,
+                                  variants=[{"id": n, "system_prompt": n} for n in names])
+        always = {prompt: (lambda task_id: True) for prompt in ("base", *names)}
+        result = run_experiment(ExperimentSpec.load(manifest), ScriptedExecutor(always), self.root / "out")
+        on_validation = {r["variant_id"] for r in result["runs"] if r["case_id"].startswith("v")} - {"baseline"}
+        self.assertEqual(len(on_validation), 1)
+
+
+class A03MinimumUnits(TempDirCase):
+    @repro
+    def test_one_task_many_repetitions_is_not_eligible(self) -> None:
+        """A3: one task is enough; repetitions of a single task are pseudo-replication yet qualify a candidate."""
+        manifest = write_manifest(self.root / "m", tasks=[exact_task("only")],
+                                  variants=[{"id": "candidate", "system_prompt": "cand"}], repetitions=5)
+        executor = ScriptedExecutor({"base": lambda t: False, "cand": lambda t: True})
+        result = run_experiment(ExperimentSpec.load(manifest), executor, self.root / "out")
+        self.assertFalse(result["summary"]["contrasts"]["candidate"]["eligible"])
+
+
+class A04UsageGates(TempDirCase):
+    @repro
+    def test_unknown_baseline_tokens_block(self) -> None:
+        """A4: the cost gate fails open; baseline tokens 0 with a 10M-token candidate is still eligible."""
+        tasks = [exact_task(f"t{i}") for i in (1, 2, 3)]
+        manifest = write_manifest(self.root / "m", tasks=tasks,
+                                  variants=[{"id": "candidate", "system_prompt": "cand"}])
+        executor = ScriptedExecutor({"base": lambda t: False, "cand": lambda t: True},
+                                    tokens={"base": 0, "cand": 10_000_000})
+        result = run_experiment(ExperimentSpec.load(manifest), executor, self.root / "out")
+        decision = result["summary"]["contrasts"]["candidate"]
+        self.assertFalse(decision["eligible"])
+
+    @repro
+    def test_adapter_latency_is_not_authoritative(self) -> None:
+        """A4: the command agent self-reports latency (command.py:99), so a slow command can report zero."""
+        code = ("import os, json, time; time.sleep(0.3); "
+                "json.dump({'latency_ms': 0, 'outputs': {'answer': 'x'}}, open(os.environ['HARNESS_RESULT_FILE'], 'w'))")
+        record = _command_run(self.root, code)
+        self.assertGreaterEqual(record.latency_ms, 250)
+
+
+class A05GraderErrors(TempDirCase):
+    @repro
+    def test_missing_grader_is_not_verified(self) -> None:
+        """A5: a grader infrastructure error counts as a quality failure and the run is still 'verified'."""
+        task = exact_task("t1")
+        task["checks"] = [{"id": "g", "type": "command", "argv": ["/nonexistent/grader"]}]
+        manifest = write_manifest(self.root / "m", tasks=[task],
+                                  variants=[{"id": "candidate", "system_prompt": "cand"}])
+        executor = ScriptedExecutor({"base": lambda t: True, "cand": lambda t: True})
+        result = run_experiment(ExperimentSpec.load(manifest), executor, self.root / "out")
+        self.assertFalse(result["runs"][0]["verified"])
+
+
+class A06StrictValues(TempDirCase):
+    def _manifest(self, **overrides: object) -> Path:
+        # json.dumps writes float('nan') / float('inf') as NaN / Infinity, which json.loads accepts.
+        return write_manifest(self.root / "m", tasks=[exact_task(f"t{i}") for i in (1, 2, 3)],
+                              variants=[{"id": "candidate", "system_prompt": "cand"}], **overrides)
+
+    @repro
+    def test_nan_in_each_gate_parameter_is_rejected(self) -> None:
+        """A6: NaN in max_regression, min_improvement or max_cost_ratio is accepted and disables the gate."""
+        for key in ("max_regression", "min_improvement", "max_cost_ratio"):
+            path = self._manifest(**{key: float("nan")})
+            with self.assertRaises(ValueError, msg=f"{key}=NaN"):
+                ExperimentSpec.load(path)
+
+    @repro
+    def test_bool_and_infinity_are_rejected(self) -> None:
+        """A6: JSON booleans and Infinity are silently coerced by int()/float() instead of being rejected."""
+        # "repetitions": true is already refused today, but only incidentally (1 < min_samples), so the
+        # reproducible coercions are a boolean seed / min_improvement and an infinite budget ratio.
+        cases = [("seed", True), ("min_improvement", True), ("max_cost_ratio", float("inf"))]
+        for key, value in cases:
+            path = self._manifest(**{key: value})
+            with self.assertRaises(ValueError, msg=f"{key}={value!r}"):
+                ExperimentSpec.load(path)
+
+
+class _BarrierExecutor:
+    """MockExecutor that makes all concurrent improvers advance in lockstep."""
+
+    def __init__(self, barrier: threading.Barrier) -> None:
+        self.inner = MockExecutor()
+        self.barrier = barrier
+
+    def execute(self, harness: Harness, task: Task):
+        report = self.inner.execute(harness, task)
+        self.barrier.wait(timeout=60)
+        return report
+
+
+class A07ConcurrentLineage(TempDirCase):
+    @repro
+    def test_six_concurrent_improvers_keep_a_single_base(self) -> None:
+        """A7: concurrent library writers create phantom copies of the base under new version numbers."""
+        base = load_harness(REPO_ROOT / "examples/workbench/base_research_harness.json")
+        task = Task.from_text("Fact-check a claim", domain="research")
+        workers = 6
+        gate = threading.Barrier(workers)
+        errors: list[str] = []
+        shared = threading.Barrier(workers)  # every improver makes the same number of probes
+
+        def run() -> None:
+            try:
+                gate.wait(timeout=60)
+                Improver(executor=_BarrierExecutor(shared)).improve(base.copy(), task, root=self.root)
+            except Exception as exc:  # reported below
+                errors.append(repr(exc))
+
+        threads = [threading.Thread(target=run) for _ in range(workers)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        files = sorted((self.root / "library/harnesses" / base.id).glob("*.json"))
+        parents = {p.stem: json.loads(p.read_text())["lineage"]["parent_version"] for p in files}
+        roots = [v for v, parent in sorted(parents.items()) if parent is None]
+        self.assertEqual(roots, ["1"], f"improver errors: {errors}")
+        self.assertEqual(errors, [], "every concurrent improver must complete")
+
+
+class A09HoldoutReuse(TempDirCase):
+    @repro
+    def test_renamed_holdout_second_candidate_is_not_eligible(self) -> None:
+        """A9: the validation set is reused at every step and run; renaming task ids hides the reuse."""
+        executor = ScriptedExecutor({"base": lambda t: False, "cand-a": lambda t: True, "cand-b": lambda t: True})
+        library = self.root / "library-root"
+
+        def holdout(prefix: str) -> list[dict]:  # same content, different ids
+            return [exact_task(f"{prefix}{i}", f"holdout case {i}", split="validation") for i in (1, 2, 3)]
+
+        first = run_experiment(ExperimentSpec.load(write_manifest(
+            self.root / "first", tasks=holdout("h"), variants=[{"id": "candidate", "system_prompt": "cand-a"}])),
+            executor, library)
+        self.assertTrue(first["summary"]["contrasts"]["candidate"]["eligible"], "precondition: first use qualifies")
+        second = run_experiment(ExperimentSpec.load(write_manifest(
+            self.root / "second", tasks=holdout("r"), variants=[{"id": "candidate", "system_prompt": "cand-b"}])),
+            executor, library)
+        self.assertFalse(second["summary"]["contrasts"]["candidate"]["eligible"])
+
+
+class A10EnvironmentSecrets(TempDirCase):
+    @repro
+    def test_solver_does_not_inherit_parent_canary(self) -> None:
+        """A10: the full parent environment is inherited by the agent command."""
+        # Report only the canary variable, never the whole environment: a failing assertion must not print secrets.
+        code = ("import os, json; json.dump({'outputs': {'answer': os.environ.get('HARNESS_TEST_CANARY', '')}}, "
+                "open(os.environ['HARNESS_RESULT_FILE'], 'w'))")
+        with mock.patch.dict(os.environ, {"HARNESS_TEST_CANARY": ENV_CANARY}):
+            report = _command_run(self.root, code)
+        self.assertNotIn(ENV_CANARY, report.outputs["answer"])
+
+    @repro
+    def test_grader_does_not_inherit_parent_canary(self) -> None:
+        """A10: graders inherit the full parent environment too."""
+        workspace = self.root / "ws"
+        workspace.mkdir()
+        argv = [sys.executable, "-c", "import os,sys; sys.exit(0 if 'HARNESS_TEST_CANARY' in os.environ else 1)"]
+        with mock.patch.dict(os.environ, {"HARNESS_TEST_CANARY": ENV_CANARY}):
+            passed = evaluate_checks([{"type": "command", "argv": argv}], {}, workspace)[0]["passed"]
+        self.assertFalse(passed)
+
+
+class A12Traceability(TempDirCase):
+    @repro
+    def test_unbounded_solver_output_is_limited(self) -> None:
+        """A12: capture_output=True has no size cap; a 20 MB stdout is held whole in the record."""
+        record = _command_run(self.root, "import sys; sys.stdout.write('x' * 20_000_000)")
+        self.assertLess(len(json.dumps(record.outputs)), 2_000_000)
+
+    @repro
+    def test_results_carry_implementation_hash(self) -> None:
+        """A12: adapter and workbench code are not hashed, so results cannot be tied to an implementation."""
+        manifest = write_manifest(self.root / "m", tasks=[exact_task("t1")],
+                                  variants=[{"id": "candidate", "system_prompt": "cand"}])
+        payload = run_experiment(ExperimentSpec.load(manifest),
+                                 ScriptedExecutor({"base": lambda t: True, "cand": lambda t: True}), self.root / "out")
+        self.assertIn("implementation_hash", payload["provenance"])
+
+    @repro
+    def test_trial_evidence_persisted_before_suite_end(self) -> None:
+        """A12: results are persisted only at the end; a crash mid-suite loses every completed trial."""
+        manifest = write_manifest(self.root / "m", tasks=[exact_task("t1"), exact_task("t2")],
+                                  variants=[{"id": "candidate", "system_prompt": "cand"}])
+        executor = ScriptedExecutor({"base": lambda t: True, "cand": lambda t: True}, crash_on_call=3)
+        root = self.root / "out"
+        with self.assertRaises(SimulatedCrash):
+            run_experiment(ExperimentSpec.load(manifest), executor, root)
+        self.assertTrue(any(p.suffix == ".sqlite3" for p in (root / "library").rglob("*")))
+
+
+if __name__ == "__main__":
+    unittest.main()
