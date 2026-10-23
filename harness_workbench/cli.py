@@ -7,6 +7,7 @@ The default path is offline (rule proposer, mock executor).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -23,9 +24,10 @@ from harness_workbench.core.anthropic_backend import (
 )
 from harness_workbench.core.executor import Executor, MockExecutor, Task
 from harness_workbench.core.harness import Harness, load_harness
-from harness_workbench.core.improver import DEFAULT_MARGIN, Improver
+from harness_workbench.core.improver import DEFAULT_MARGIN, GateVerdict, Improver
 from harness_workbench.core.proposer import FileProposer, LLMProposer, Proposer, ProposerError, RuleBasedProposer
 from harness_workbench.core.db import LineageConflict, SchemaMismatch, StoreBusyError
+from harness_workbench.experiments.backends import BackendUnavailable
 from harness_workbench.core.store import (
     ExportError,
     MigrationRequired,
@@ -45,6 +47,7 @@ def main(argv: list[str] | None = None) -> int:
     except (
         FileNotFoundError, ValueError, ProposerError, AnthropicError, OSError,
         MigrationRequired, ExportError, LineageConflict, SchemaMismatch, StoreBusyError,
+        BackendUnavailable,
     ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -86,7 +89,9 @@ def build_parser() -> argparse.ArgumentParser:
     improve.set_defaults(func=_cmd_improve)
 
     experiment = sub.add_parser("experiment", help="run matched, repeated harness comparisons with acceptance checks")
-    experiment.add_argument("--spec", type=Path, required=True, help="experiment manifest JSON")
+    experiment.add_argument("--spec", type=Path, help="experiment manifest JSON (required unless --list-incomplete)")
+    experiment.add_argument("--list-incomplete", action="store_true",
+                            help="list experiments left running by an interrupted run and exit")
     experiment.add_argument("--root", type=Path, default=Path("."), help="where experiments/ is written")
     _add_provider_args(experiment)
     experiment.add_argument("--json", action="store_true")
@@ -244,25 +249,29 @@ def _cmd_probe(args: argparse.Namespace) -> int:
 
 
 def _cmd_improve(args: argparse.Namespace) -> int:
+    from dataclasses import replace
+    from harness_workbench.experiments import ExperimentSpec, run_experiment
+    from harness_workbench.experiments.manifest import Variant
+    from harness_workbench.experiments.status import DecisionStatus
+
     harness = load_harness(args.harness)
     task = _task(args)
+    validation_spec = ExperimentSpec.load(args.validation_spec) if args.validation_spec else None
+    if validation_spec is not None and validation_spec.mode != "confirmatory":
+        raise ValueError(
+            "validation spec is exploratory (schema v1 or mode exploratory); run 'harness-workbench "
+            "migrate-manifest' and assign splits and controls")
     proposer, executor = _backend(args)
     gate = None
-    validation_evidence = []
-    if args.validation_spec:
-        import hashlib
-        from dataclasses import replace
-        from harness_workbench.experiments import ExperimentSpec, run_experiment
-        from harness_workbench.experiments.manifest import Variant
-
-        validation_spec = ExperimentSpec.load(args.validation_spec)
-        if validation_spec.executor_config.get("type") == "command":
+    validation_evidence: list[dict] = []
+    if validation_spec is not None:
+        if validation_spec.executor.type == "command":
             from harness_workbench.experiments.command import CommandHarnessExecutor
             validation_executor = CommandHarnessExecutor.from_config(validation_spec.executor, validation_spec.environment)
         else:
             validation_executor = executor
 
-        def gate(before: Harness, candidate: Harness) -> bool:
+        def gate(before: Harness, candidate: Harness) -> GateVerdict:
             def variant(identity: str, value: Harness) -> Variant:
                 fingerprint = hashlib.sha256(value.to_json().encode("utf-8")).hexdigest()
                 return Variant(identity, value, Path("(dynamically-composed)"), fingerprint,
@@ -271,12 +280,15 @@ def _cmd_improve(args: argparse.Namespace) -> int:
             controlled = replace(validation_spec, variants=(
                 variant("baseline", before), variant("candidate", candidate),
             ))
-            evidence = run_experiment(controlled, validation_executor, args.root)
-            validation_evidence.append({
-                "report": evidence["report_path"], "results": evidence["results_path"],
-                "decision": evidence["summary"]["contrasts"]["candidate"],
-            })
-            return bool(evidence["summary"]["contrasts"]["candidate"]["eligible"])
+            outcome = run_experiment(controlled, validation_executor, args.root)
+            evidence = {
+                "report": outcome["report_path"], "results": outcome["results_path"],
+                "decision": outcome["decision"],
+            }
+            validation_evidence.append(evidence)
+            # Only the persisted decision approves; the per-variant contrasts are diagnostics.
+            return GateVerdict(outcome["decision"]["status"] == DecisionStatus.ELIGIBLE.value,
+                               outcome["decision_id"], evidence)
 
     improver = Improver(proposer, executor, margin=args.margin, promotion_gate=gate)
     result = improver.improve(harness, task, k=args.k, mode=args.mode, root=args.root)
@@ -301,15 +313,43 @@ def _cmd_improve(args: argparse.Namespace) -> int:
     if result.run_dir is not None:
         print(f"saved {result.run_dir}")
     for evidence in validation_evidence:
-        print(f"validation {evidence['report']}  eligible={evidence['decision']['eligible']}")
+        print(f"validation {evidence['report']}  decision={evidence['decision']['status']}")
     return 0
+
+
+def _number(value: object, spec: str) -> str:
+    return "unknown" if value is None else format(value, spec)
+
+
+def _variant_line(name: str, stats: dict) -> str:
+    pass_rate = "unknown" if stats["pass_rate"] is None else f"{stats['pass_rate']:.0%}"
+    return (f"  {name:20} quality={_number(stats['mean_score'], '.3f')} pass={pass_rate} "
+            f"tokens={_number(stats['mean_tokens'], '.0f')}")
 
 
 def _cmd_experiment(args: argparse.Namespace) -> int:
     from harness_workbench.experiments import ExperimentSpec, run_experiment
 
+    if args.list_incomplete:
+        from harness_workbench.core.db import WorkbenchDB
+
+        db = WorkbenchDB.open(args.root.resolve())
+        try:
+            incomplete = db.incomplete_experiments()
+        finally:
+            db.close()
+        if args.json:
+            print(json.dumps(incomplete, indent=2))
+        else:
+            for experiment_id in incomplete:
+                print(experiment_id)
+        return 0
+    if args.spec is None:
+        raise ValueError("--spec is required unless --list-incomplete is given")
     spec = ExperimentSpec.load(args.spec)
     if args.provider == "command":
+        if spec.executor.type != "command":
+            raise ValueError("--provider command requires executor.type 'command' in the manifest")
         from harness_workbench.experiments.command import CommandHarnessExecutor
         executor = CommandHarnessExecutor.from_config(spec.executor, spec.environment)
     else:
@@ -318,19 +358,20 @@ def _cmd_experiment(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps({
             "experiment_id": result["experiment_id"],
+            "mode": result["mode"],
+            "decision": result["decision"],
+            "decision_id": result["decision_id"],
             "summary": result["summary"],
             "report_path": result["report_path"],
             "results_path": result["results_path"],
         }, indent=2))
     else:
         print(f"experiment {result['experiment_id']}  {spec.name}")
+        print(f"decision {result['decision']['status']}")
+        for reason in result["decision"]["reasons"]:
+            print(f"  {reason}")
         for name, stats in result["summary"]["variants"].items():
-            verdict = result["summary"]["contrasts"].get(name)
-            status = "BASE" if verdict is None else ("ELIGIBLE" if verdict["eligible"] else "REJECTED")
-            print(f"  {name:20} {status:9} quality={stats['mean_score']:.3f} "
-                  f"pass={stats['pass_rate']:.0%} tokens={stats['mean_tokens']:.0f}")
-            if verdict and verdict["reasons"]:
-                print("    " + "; ".join(verdict["reasons"]))
+            print(_variant_line(name, stats))
         print(f"report {result['report_path']}")
         print(f"data   {result['results_path']}")
     return 0

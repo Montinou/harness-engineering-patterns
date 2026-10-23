@@ -193,7 +193,7 @@ class ComposeAndStoreTests(unittest.TestCase):
 
     def test_improve_cli_can_require_experiment_validation(self) -> None:
         from harness_workbench.cli import main
-        from contextlib import redirect_stdout
+        from contextlib import redirect_stderr, redirect_stdout
         from io import StringIO
         root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as folder:
@@ -205,10 +205,11 @@ class ComposeAndStoreTests(unittest.TestCase):
                 "--validation-spec", str(root / "examples/experiments/local-command.json"),
                 "--root", folder,
             ]
-            with redirect_stdout(StringIO()):
-                self.assertEqual(main(args), 0)
-            self.assertTrue(list((Path(folder) / "experiments").glob("*/results.json")))
-            self.assertTrue(list((Path(folder) / "library/harnesses/research-agent").glob("2.json")))
+            # The legacy manifest is exploratory: the gate refuses it before any execution. The former
+            # "version 2 is persisted" assertion moves to T28 against the confirmatory demo.
+            with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+                self.assertEqual(main(args), 2)
+            self.assertFalse((Path(folder) / "experiments").exists())
 
     def test_same_parent_can_create_two_immutable_children(self) -> None:
         from harness_workbench.core.executor import MockExecutor
