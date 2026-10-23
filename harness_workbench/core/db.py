@@ -18,7 +18,7 @@ from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from harness_workbench.core.harness import Harness, harness_from_dict
 from harness_workbench.core.store import _version_key
@@ -119,6 +119,13 @@ _SCHEMA_STATEMENTS = (
 EXPERIMENT_TERMINAL_STATUSES = ("complete", "incomplete", "invalid")
 _FP_PREFIX = 8
 _SELECTION_KEYS = ("finalist_id", "finalist_hash", "baseline_hash", "plan_hash", "policy_hash")
+
+
+class HoldoutReservation(NamedTuple):
+    """Outcome of :meth:`WorkbenchDB.reserve_holdout_attempt`."""
+
+    blocked_reason: str | None
+    earlier_experiment_ids: tuple[str, ...]
 
 
 class StoreBusyError(RuntimeError):
@@ -493,22 +500,62 @@ class WorkbenchDB:
         policy_hash: str,
         experiment_id: str,
     ) -> str | None:
+        """Evaluate the exposure rule and record the attempt; return the block reason or ``None``.
+
+        Thin wrapper over :meth:`reserve_holdout_attempt` for callers that only need the verdict. Callers
+        that must link earlier interrupted attempts to the final decision use that method instead.
+        """
+        return self.reserve_holdout_attempt(
+            task_fingerprints=task_fingerprints,
+            candidate_hash=candidate_hash,
+            baseline_hash=baseline_hash,
+            policy_hash=policy_hash,
+            experiment_id=experiment_id,
+        ).blocked_reason
+
+    def reserve_holdout_attempt(
+        self,
+        *,
+        task_fingerprints: Iterable[str],
+        candidate_hash: str,
+        baseline_hash: str,
+        policy_hash: str,
+        experiment_id: str,
+    ) -> HoldoutReservation:
         """Evaluate the exposure rule and record the attempt in ONE ``BEGIN IMMEDIATE`` transaction.
 
-        Returns the reason the holdout is blocked, or ``None`` when this candidate may use it. A row per
-        fingerprint is inserted either way, so a refused attempt stays visible.
+        ``experiment_id`` must be registered (its ``plan_hash`` is part of the rule). A row per fingerprint
+        is inserted either way, so a refused attempt stays visible. The result carries:
+
+        * ``blocked_reason``: why the holdout is blocked, or ``None`` when this candidate may use it. A
+          holdout task already consumed by a completed decision, or reserved by another candidate, is
+          blocked. An unfinished reservation of the SAME candidate may be rerun only when its baseline hash,
+          policy hash and experiment ``plan_hash`` are all identical to this attempt's; any difference blocks.
+        * ``earlier_experiment_ids``: the other experiments (never ``experiment_id`` itself) that hold an
+          unfinished, unrefused reservation of these fingerprints under the identical candidate, baseline,
+          policy and plan, in reservation order. Empty when the attempt is blocked. A rerun's decision should
+          link these so no earlier attempt is dropped.
         """
         fingerprints = list(dict.fromkeys(task_fingerprints))
         with self.transaction() as conn:
+            plan_hash = self._experiment_plan_hash(conn, experiment_id)
             existing = {
                 fingerprint: conn.execute(
-                    "SELECT experiment_id, candidate_hash, decision_status FROM holdout_exposure"
-                    " WHERE task_fingerprint=? AND blocked_reason IS NULL ORDER BY id",
+                    "SELECT h.experiment_id, h.candidate_hash, h.baseline_hash, h.policy_hash,"
+                    " h.decision_status, e.plan_hash FROM holdout_exposure h"
+                    " JOIN experiments e ON e.experiment_id=h.experiment_id"
+                    " WHERE h.task_fingerprint=? AND h.blocked_reason IS NULL ORDER BY h.id",
                     (fingerprint,),
                 ).fetchall()
                 for fingerprint in fingerprints
             }
-            reason = self._exposure_block(existing, candidate_hash)
+            reason = self._exposure_block(existing, candidate_hash, baseline_hash, policy_hash, plan_hash)
+            earlier: list[str] = []
+            if reason is None:
+                for rows in existing.values():
+                    for row in rows:
+                        if row["experiment_id"] != experiment_id and row["experiment_id"] not in earlier:
+                            earlier.append(row["experiment_id"])
             now = self._now()
             conn.executemany(
                 "INSERT INTO holdout_exposure(task_fingerprint, candidate_hash, baseline_hash, policy_hash,"
@@ -516,10 +563,16 @@ class WorkbenchDB:
                 [(fp, candidate_hash, baseline_hash, policy_hash, experiment_id, now, reason)
                  for fp in fingerprints],
             )
-        return reason
+        return HoldoutReservation(reason, tuple(earlier))
 
     @staticmethod
-    def _exposure_block(existing: dict[str, list[sqlite3.Row]], candidate_hash: str) -> str | None:
+    def _exposure_block(
+        existing: dict[str, list[sqlite3.Row]],
+        candidate_hash: str,
+        baseline_hash: str,
+        policy_hash: str,
+        plan_hash: str,
+    ) -> str | None:
         for fingerprint, rows in existing.items():
             for row in rows:
                 if row["decision_status"] is not None:
@@ -533,6 +586,23 @@ class WorkbenchDB:
                     return (
                         f"holdout task {fingerprint[:_FP_PREFIX]} reserved by another candidate"
                         f" {str(row['candidate_hash'])[:_FP_PREFIX]} (experiment {row['experiment_id']})"
+                    )
+        # Same candidate: an interrupted confirmation resumes only under identical fingerprints.
+        for fingerprint, rows in existing.items():
+            for row in rows:
+                changed = [
+                    name for name, stored, current in (
+                        ("baseline", row["baseline_hash"], baseline_hash),
+                        ("policy", row["policy_hash"], policy_hash),
+                        ("plan", row["plan_hash"], plan_hash),
+                    ) if stored != current
+                ]
+                if changed:
+                    return (
+                        f"holdout task {fingerprint[:_FP_PREFIX]} was reserved by an interrupted confirmation"
+                        f" of this candidate (experiment {row['experiment_id']}) under a different"
+                        f" {' and '.join(changed)}; a rerun needs the identical candidate, baseline, policy"
+                        " and plan"
                     )
         return None
 

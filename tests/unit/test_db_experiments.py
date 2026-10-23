@@ -210,6 +210,63 @@ class HoldoutReservationTests(ExperimentDBCase):
         self.assertEqual(self.exposure_rows()[-1]["experiment_id"], "exp-b")
         self.assertIsNone(self.reserve(["fp1"], "cand-a-long-hash", "exp-a"))
 
+    def attempt(self, experiment_id: str, *, baseline: str = "base", policy: str = "policy",
+                candidate: str = "cand-a") -> Any:
+        return self.db.reserve_holdout_attempt(
+            task_fingerprints=["f1", "f2"], candidate_hash=candidate, baseline_hash=baseline,
+            policy_hash=policy, experiment_id=experiment_id,
+        )
+
+    def test_rerun_with_a_different_policy_is_blocked(self) -> None:
+        self.start("exp-c")
+        self.assertIsNone(self.attempt("exp-a").blocked_reason)
+        outcome = self.attempt("exp-c", policy="lax")
+        self.assertIn("policy", outcome.blocked_reason)
+        self.assertIn("exp-a", outcome.blocked_reason)
+        self.assertEqual(outcome.earlier_experiment_ids, ())
+
+    def test_rerun_with_a_different_baseline_is_blocked(self) -> None:
+        self.start("exp-c")
+        self.assertIsNone(self.attempt("exp-a").blocked_reason)
+        outcome = self.attempt("exp-c", baseline="other-base")
+        self.assertIn("baseline", outcome.blocked_reason)
+        self.assertEqual(outcome.earlier_experiment_ids, ())
+
+    def test_rerun_with_a_different_plan_hash_is_blocked(self) -> None:
+        other_plan = make_plan(seed=12)
+        self.assertNotEqual(other_plan.plan_hash, make_plan().plan_hash)
+        self.start("exp-c", plan=other_plan)
+        self.assertIsNone(self.attempt("exp-a").blocked_reason)
+        outcome = self.attempt("exp-c")
+        self.assertIn("plan", outcome.blocked_reason)
+        self.assertEqual(outcome.earlier_experiment_ids, ())
+        # The refused attempt stays visible but never counts as a reservation.
+        self.assertEqual(sum(r["blocked_reason"] is not None for r in self.exposure_rows()), 2)
+        self.assertIsNone(self.attempt("exp-a").blocked_reason)
+
+    def test_identical_rerun_after_an_interrupted_attempt_is_allowed_and_surfaces_earlier_experiments(self) -> None:
+        self.start("exp-c")
+        self.start("exp-d", plan=make_plan())
+        first = self.attempt("exp-a")
+        self.assertEqual((first.blocked_reason, first.earlier_experiment_ids), (None, ()))
+        second = self.attempt("exp-b")
+        self.assertEqual((second.blocked_reason, second.earlier_experiment_ids), (None, ("exp-a",)))
+        third = self.attempt("exp-c")
+        self.assertEqual((third.blocked_reason, third.earlier_experiment_ids), (None, ("exp-a", "exp-b")))
+        # The same experiment id is not its own earlier attempt, and a refused attempt is not listed.
+        again = self.attempt("exp-c")
+        self.assertEqual(again.earlier_experiment_ids, ("exp-a", "exp-b"))
+        self.assertIsNotNone(self.attempt("exp-d", candidate="cand-z").blocked_reason)
+        self.assertEqual(self.attempt("exp-d").earlier_experiment_ids, ("exp-a", "exp-b", "exp-c"))
+
+    def test_reserve_holdout_keeps_returning_the_reason_or_none(self) -> None:
+        self.assertIsNone(self.reserve(["f1", "f2"], "cand-a", "exp-a"))
+        self.assertIsNone(self.reserve(["f1", "f2"], "cand-a", "exp-b"))
+        self.start("exp-c")
+        self.assertIsInstance(self.db.reserve_holdout(
+            task_fingerprints=["f1"], candidate_hash="cand-a", baseline_hash="x", policy_hash="policy",
+            experiment_id="exp-c"), str)
+
     def test_long_fingerprints_are_shortened_to_eight_characters_in_the_reason(self) -> None:
         self.assertIsNone(self.reserve(["0123456789abcdef"], "fedcba9876543210", "exp-a"))
         self.assertEqual(
