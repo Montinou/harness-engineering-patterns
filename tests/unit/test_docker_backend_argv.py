@@ -350,10 +350,10 @@ class RunAndCleanupTests(unittest.TestCase):
         backend, log = self.probed()
         outcome = self.run_it(backend)
         self.assertEqual(outcome.status.value, "completed")
-        run_call = calls(log)[-1]
-        self.assertEqual(run_call[0], "run")
+        recorded = calls(log)
+        run_call = next(c for c in recorded[2:] if c[0] == "run" and "-w" in c)
         self.assertEqual(run_call[run_call.index("-w") + 1], "/sandbox/1")
-        self.assertNotIn("rm", [c[0] for c in calls(log)[2:]])
+        self.assertNotIn("rm", [c[0] for c in recorded[2:]])
 
     def test_writable_mounts_are_made_world_writable_before_mounting(self):
         backend, _ = self.probed()

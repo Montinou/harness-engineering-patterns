@@ -4,6 +4,7 @@ Skipped unless HARNESS_SANDBOX_TESTS=1 and a Docker daemon passes the backend's
 own capability self-test. A skipped test is NOT RUN, not passed.
 """
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -15,6 +16,7 @@ from harness_workbench.experiments.backends import (
     Mounts,
     ProcessLimits,
 )
+from harness_workbench.experiments.grader import SnapshotLimits, snapshot_workspace
 from harness_workbench.experiments.manifest import EnvironmentConfig
 from harness_workbench.experiments.status import ExecutionStatus
 
@@ -90,6 +92,32 @@ class SandboxBackendTests(unittest.TestCase):
                                  capture_output=True, text=True, timeout=30)
         self.assertEqual(listing.stdout.strip(), "")
 
+    def test_container_user_uses_host_fixture_files_and_host_reads_back_private_files(self):
+        sub = self.work / "src"
+        sub.mkdir()
+        (sub / "app.py").write_text("print('old')", encoding="utf-8")
+        (sub / "app.py").chmod(0o644)
+        sub.chmod(0o755)
+        code = (
+            "import os; "
+            "open('src/app.py', 'w').write('print(\\'new\\')'); "
+            "open('src/new.py', 'w').write('x'); "
+            "os.makedirs('made/deep', mode=0o700); "
+            "fd = os.open('made/deep/private.txt', os.O_WRONLY | os.O_CREAT, 0o600); "
+            "os.write(fd, b'secret'); os.close(fd)")
+        outcome = self.run_py(code)
+        self.assertEqual(outcome.status, ExecutionStatus.COMPLETED, outcome.stderr)
+        self.assertEqual((sub / "app.py").read_text(encoding="utf-8"), "print('new')")
+        self.assertEqual((sub / "new.py").read_text(encoding="utf-8"), "x")
+        # the run already handed the tree back: the host reads the 0600 file and the snapshot accepts it
+        self.assertEqual((self.work / "made" / "deep" / "private.txt").read_text(encoding="utf-8"), "secret")
+        copy = self.root / "snapshot"
+        snapshot_workspace(self.work, copy, SnapshotLimits(100, 1_000_000))
+        self.assertEqual((copy / "made" / "deep" / "private.txt").read_text(encoding="utf-8"), "secret")
+        shutil.rmtree(self.work)  # raises when anything is left that the host cannot delete
+        self.assertFalse(self.work.exists())
+        self.work.mkdir()
+
     def test_timeout_removes_container_and_cleanup_makes_dirs_removable(self):
         code = ("import os, time; os.makedirs('sub', exist_ok=True); open('sub/f','w').write('x'); "
                 "os.chmod('sub', 0o700); time.sleep(120)")
@@ -98,8 +126,6 @@ class SandboxBackendTests(unittest.TestCase):
         listing = subprocess.run([self.backend.docker, "ps", "-q", "--filter", "name=hw-run-"],
                                  capture_output=True, text=True, timeout=30)
         self.assertEqual(listing.stdout.strip(), "")
-        self.assertTrue(self.backend.cleanup([self.work]))
-        import shutil
         shutil.rmtree(self.work)
         self.assertFalse(self.work.exists())
         self.work.mkdir()

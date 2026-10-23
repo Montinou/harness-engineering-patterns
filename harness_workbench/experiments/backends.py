@@ -16,6 +16,7 @@ import os
 import re
 import signal
 import select
+import stat
 import subprocess
 import sys
 import tempfile
@@ -317,6 +318,31 @@ sys.exit(1 if failed else 0)
 """
 
 
+def _open_tree(root: Path) -> None:
+    """``chmod -R a+rwX`` for a tree the host owns, so the container user can use all of it.
+
+    Symlinks are neither followed nor changed: a link planted in a fixture must not reach a file
+    outside the tree. Raises ``OSError`` when a path cannot be changed.
+    """
+    def fail(error: OSError) -> None:
+        raise error
+
+    def widen(path: str | Path, add: int) -> None:
+        mode = os.lstat(path).st_mode
+        if not stat.S_ISLNK(mode):
+            os.chmod(path, stat.S_IMODE(mode) | add)
+
+    widen(root, 0o777)
+    for dirpath, dirnames, filenames in os.walk(root, onerror=fail):
+        for directory in dirnames:
+            widen(os.path.join(dirpath, directory), 0o777)
+        for filename in filenames:
+            path = os.path.join(dirpath, filename)
+            mode = os.lstat(path).st_mode
+            if stat.S_ISREG(mode):
+                os.chmod(path, stat.S_IMODE(mode) | 0o666 | (0o111 if mode & 0o111 else 0))
+
+
 class DockerBackend:
     """Candidate code in a locked-down container, or an explicit refusal.
 
@@ -352,8 +378,10 @@ class DockerBackend:
         text = (outcome.error or outcome.stderr or outcome.stdout or "").strip()
         return " ".join(text.split())[:300] or f"status {outcome.status.value}"
 
-    def _remove_container(self, name: str) -> None:
-        self._control([self.docker, "rm", "-f", name], _CONTROL_TIMEOUT_SECONDS)
+    def _remove_container(self, name: str) -> bool:
+        """``docker rm -f``; True when the container is gone (``-f`` also succeeds for a missing one)."""
+        return self._control(
+            [self.docker, "rm", "-f", name], _CONTROL_TIMEOUT_SECONDS).status is ExecutionStatus.COMPLETED
 
     # -- command line -----------------------------------------------------------
 
@@ -452,7 +480,7 @@ class DockerBackend:
             raise BackendUnavailable("sandbox backend used before a successful probe()")
         try:
             for path in mounts.writable:
-                os.chmod(path, 0o777)  # uid 65534 must be able to write into host-owned dirs
+                _open_tree(Path(path))  # uid 65534 must be able to use everything the host created there
         except OSError as exc:
             return ProcessOutcome(
                 status=ExecutionStatus.EXECUTION_ERROR, exit_code=None, stdout="", stderr="",
@@ -461,9 +489,21 @@ class DockerBackend:
         name = f"hw-run-{uuid.uuid4().hex}"
         line = self.command_line(argv, cwd, env, limits, mounts, name=name)
         outcome = LocalBackend().run(line, cwd=cwd, env=self._client_env(), limits=limits, mounts=Mounts())
+        problems: list[str] = []
         if outcome.status in (ExecutionStatus.TIMEOUT, ExecutionStatus.RESOURCE_LIMIT):
-            self._remove_container(name)
-        return self._classify_docker_failure(outcome)
+            # A container that survives could keep changing the tree that is about to be snapshotted.
+            if not self._remove_container(name):
+                problems.append(f"container {name} could not be removed after {outcome.status.value}")
+        outcome = self._classify_docker_failure(outcome)
+        # Whatever the container wrote belongs to uid 65534: hand it back before anyone on the host
+        # snapshots, reads or deletes it. A tree that cannot be reclaimed is not a solver result.
+        if not self.cleanup(mounts.writable):
+            problems.append("writable mounts could not be reclaimed for the host user")
+        if problems:
+            return replace(
+                outcome, status=ExecutionStatus.EXECUTION_ERROR, retryable=True,
+                error=f"docker infrastructure failure, not a solver result: {'; '.join(problems)}")
+        return outcome
 
     @staticmethod
     def _classify_docker_failure(outcome: ProcessOutcome) -> ProcessOutcome:
@@ -480,13 +520,16 @@ class DockerBackend:
         return outcome
 
     def cleanup(self, paths: Sequence[Path]) -> bool:
-        """Make files created by uid 65534 removable by the host user. True when every path succeeded."""
+        """Make files created by uid 65534 usable by the host user. True when every path succeeded."""
         ok = True
         for path in paths:
+            name = f"hw-clean-{uuid.uuid4().hex}"
             outcome = self._control(
-                [self.docker, "run", "--rm", "--network", "none", "--user", "0",
+                [self.docker, "run", "--rm", "--name", name, "--network", "none", "--user", "0",
                  "-v", f"{Path(path).resolve()}:/x", self.image, "chmod", "-R", "a+rwX", "/x"],
                 _CONTROL_TIMEOUT_SECONDS)
+            if outcome.status is not ExecutionStatus.COMPLETED:
+                self._remove_container(name)
             ok = ok and outcome.status is ExecutionStatus.COMPLETED
         return ok
 
