@@ -12,6 +12,7 @@ import json
 import math
 import re
 import sqlite3
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -83,6 +84,7 @@ class WorkbenchDB:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._depth = 0
+        self._busy_timeout_s = busy_timeout_ms / 1000
         # isolation_level=None: no implicit transactions; transaction() issues BEGIN IMMEDIATE.
         self._conn = sqlite3.connect(
             str(self.path), timeout=busy_timeout_ms / 1000, isolation_level=None
@@ -112,7 +114,7 @@ class WorkbenchDB:
     # -- schema ---------------------------------------------------------
 
     def _initialize(self) -> None:
-        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._enable_wal()
         # Check before creating anything so a refused database stays untouched.
         has_meta = self._conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_meta'"
@@ -127,6 +129,22 @@ class WorkbenchDB:
                 (str(DB_SCHEMA_VERSION),),
             )
             self._check_schema_version()
+
+    def _enable_wal(self) -> None:
+        """Switch to WAL. The switch fails at once with "locked" when several connections open
+        a new database together (the busy handler is not consulted), so retry until the
+        busy timeout elapses; an already-WAL database needs no switch at all."""
+        deadline = time.monotonic() + self._busy_timeout_s
+        while True:
+            try:
+                if str(self._conn.execute("PRAGMA journal_mode").fetchone()[0]).lower() == "wal":
+                    return
+                self._conn.execute("PRAGMA journal_mode=WAL")
+                return
+            except sqlite3.OperationalError as exc:
+                if not _is_busy(exc) or time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.005)
 
     def _check_schema_version(self) -> None:
         row = self._conn.execute(
@@ -250,6 +268,11 @@ class WorkbenchDB:
         ).fetchall()
         rows.sort(key=lambda row: _version_key(row["version"]))
         return [harness_from_dict(_loads_finite(row["document"])) for row in rows]
+
+    def version_keys(self) -> set[tuple[str, str]]:
+        """Every registered ``(harness_id, version)`` pair, without parsing documents."""
+        rows = self._conn.execute("SELECT harness_id, version FROM harness_versions").fetchall()
+        return {(row["harness_id"], row["version"]) for row in rows}
 
     def harness_ids(self) -> list[str]:
         rows = self._conn.execute(

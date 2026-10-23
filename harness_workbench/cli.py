@@ -1,6 +1,6 @@
 """Command line for the Harness Workbench.
 
-Commands: propose, probe, improve, experiment, migrate-manifest, report.
+Commands: propose, probe, improve, experiment, migrate-manifest, export-library, report.
 The default path is offline (rule proposer, mock executor).
 """
 
@@ -25,7 +25,15 @@ from harness_workbench.core.executor import Executor, MockExecutor, Task
 from harness_workbench.core.harness import Harness, load_harness
 from harness_workbench.core.improver import DEFAULT_MARGIN, Improver
 from harness_workbench.core.proposer import FileProposer, LLMProposer, Proposer, ProposerError, RuleBasedProposer
-from harness_workbench.core.store import known_harness_ids, lineage_chain, load_versions
+from harness_workbench.core.db import LineageConflict, SchemaMismatch, StoreBusyError
+from harness_workbench.core.store import (
+    ExportError,
+    MigrationRequired,
+    export_library,
+    known_harness_ids,
+    lineage_chain,
+    load_versions,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -34,7 +42,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return int(args.func(args))
-    except (FileNotFoundError, ValueError, ProposerError, AnthropicError, OSError) as exc:
+    except (
+        FileNotFoundError, ValueError, ProposerError, AnthropicError, OSError,
+        MigrationRequired, ExportError, LineageConflict, SchemaMismatch, StoreBusyError,
+    ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
@@ -87,6 +98,11 @@ def build_parser() -> argparse.ArgumentParser:
     migrate.add_argument("--splits", type=Path, help="JSON object mapping task id to development|validation|regression")
     migrate.add_argument("--dry-run", action="store_true", help="print the result and write nothing")
     migrate.set_defaults(func=_cmd_migrate_manifest)
+
+    export = sub.add_parser("export-library", help="regenerate the JSON library views from the database")
+    export.add_argument("--root", type=Path, default=Path("."), help="where library/ lives")
+    export.add_argument("--json", action="store_true", help="print the regenerated paths as a JSON list")
+    export.set_defaults(func=_cmd_export_library)
 
     report = sub.add_parser("report", help="show saved lineage, metrics and lessons")
     report.add_argument("--root", type=Path, default=Path("."))
@@ -362,6 +378,16 @@ def _cmd_migrate_manifest(args: argparse.Namespace) -> int:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(text, encoding="utf-8")
     print(f"wrote {args.out}")
+    return 0
+
+
+def _cmd_export_library(args: argparse.Namespace) -> int:
+    paths = export_library(args.root)
+    if args.json:
+        print(json.dumps([str(path) for path in paths], indent=2))
+    else:
+        for path in paths:
+            print(path)
     return 0
 
 

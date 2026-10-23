@@ -449,7 +449,9 @@ def run_experiment(spec: ExperimentSpec, executor: Any, root: str | Path) -> dic
             "repetitions": spec.repetitions, "seed": spec.seed,
             "min_samples": spec.min_samples, "min_improvement": spec.min_improvement,
             "max_regression": spec.max_regression,
-            "max_cost_ratio": spec.max_cost_ratio, "max_latency_ratio": spec.max_latency_ratio,
+            # None means unlimited; spec.max_cost_ratio maps it to inf, which JSON cannot carry.
+            "max_cost_ratio": spec.budget.max_token_ratio,
+            "max_latency_ratio": spec.budget.max_latency_ratio,
             "confidence": spec.confidence, "bootstrap_iterations": spec.bootstrap_iterations,
         },
         "provenance": {
@@ -469,7 +471,7 @@ def run_experiment(spec: ExperimentSpec, executor: Any, root: str | Path) -> dic
         "summary": summary,
         "runs": [item.to_dict() for item in records],
     }
-    (out_dir / "results.json").write_text(json.dumps(payload, indent=2, ensure_ascii=False, default=str) + "\n", encoding="utf-8")
+    (out_dir / "results.json").write_text(json.dumps(payload, indent=2, ensure_ascii=False, default=str, allow_nan=False) + "\n", encoding="utf-8")
     (out_dir / "report.html").write_text(render_html(payload), encoding="utf-8")
     payload["report_path"] = str(out_dir / "report.html")
     payload["results_path"] = str(out_dir / "results.json")

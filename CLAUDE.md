@@ -22,7 +22,7 @@ harness-workbench improve --harness examples/workbench/base_research_harness.jso
   --task "Fact-check a claim" --domain research --root .
 ```
 
-Other subcommands: `propose`, `probe`, `report --harness-id <id>`. `--provider anthropic` needs `ANTHROPIC_API_KEY`; models come from `--solver-model`/`--improver-model` or `HARNESS_SOLVER_MODEL`/`HARNESS_IMPROVER_MODEL` (defaults `claude-sonnet-5-5` solver, `claude-haiku-5-5` proposer and judge). Tests must not hit the network.
+Other subcommands: `propose`, `probe`, `export-library --root <dir>`, `report --harness-id <id>`. `--provider anthropic` needs `ANTHROPIC_API_KEY`; models come from `--solver-model`/`--improver-model` or `HARNESS_SOLVER_MODEL`/`HARNESS_IMPROVER_MODEL` (defaults `claude-sonnet-5-5` solver, `claude-haiku-5-5` proposer and judge). Tests must not hit the network.
 
 ## Architecture
 
@@ -34,7 +34,7 @@ The loop is **Propose → Probe → Compose → Persist**, wired by `Improver` (
 
 `Harness` (`core/harness.py`) has eight editable components (system prompt, guardrails, memory, tools, subagents, skills, scripts, plugins). `version` increments only on adoption; candidates carry provisional versions like `1+inv-verify-plan` and are never written to the library. The proposer and the mock executor share failure codes (`missing_verification`, `missing_plan`, `thin_memory`, `missing_domain_tool:<name>`, `tool_noise_unhandled`, `no_reviewer`), so a new code must be added on both sides.
 
-`core/store.py` persists to `--root`: `runs/<timestamp>-<id>-v<version>/` (evidence), `library/harnesses/<id>/<version>.json` (with parent pointer), `library/EXPERIENCE.md`, `library/lessons/<domain>.md`, `library/index.json`. Re-running `improve` on the same parent version overwrites that next version; continue from the adopted file for a longer chain. `runs/` and `library/` hold generated output.
+`core/store.py` persists to `--root`: versions are allocated in the SQLite database `library/workbench.sqlite3` (`core/db.py`, one transaction per `improve`; the base is never renumbered, and re-running `improve` on the same parent allocates the next free version). The JSON files are exported views: `library/harnesses/<id>/<version>.json` (with parent pointer, written atomically), `library/index.json` (regenerated from the database), plus `runs/<timestamp>-<id>-v<version>/` (evidence), `library/EXPERIENCE.md` and `library/lessons/<domain>.md`. If an export fails after the commit, `harness-workbench export-library --root <dir>` regenerates the views. A library with JSON versions the database has never seen is refused with `MigrationRequired`. `runs/` and `library/` hold generated output.
 
 The Anthropic client is raw `urllib` against `POST /v1/messages` (no SDK); thinking blocks are dropped, only text blocks are kept.
 

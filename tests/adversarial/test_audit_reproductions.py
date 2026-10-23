@@ -29,6 +29,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from harness_workbench.core.db import WorkbenchDB
 from harness_workbench.core.executor import BehavioralReport, MockExecutor, Task
 from harness_workbench.core.harness import Harness, load_harness
 from harness_workbench.core.improver import Improver
@@ -194,7 +195,6 @@ class _BarrierExecutor:
 
 
 class A07ConcurrentLineage(TempDirCase):
-    @repro
     def test_six_concurrent_improvers_keep_a_single_base(self) -> None:
         """A7: concurrent library writers create phantom copies of the base under new version numbers."""
         base = load_harness(REPO_ROOT / "examples/workbench/base_research_harness.json")
@@ -221,6 +221,12 @@ class A07ConcurrentLineage(TempDirCase):
         roots = [v for v, parent in sorted(parents.items()) if parent is None]
         self.assertEqual(roots, ["1"], f"improver errors: {errors}")
         self.assertEqual(errors, [], "every concurrent improver must complete")
+        db = WorkbenchDB.open(self.root)
+        try:
+            stored = db.versions("research-agent")
+        finally:
+            db.close()
+        self.assertEqual(len([v for v in stored if v.lineage.parent_version is None]), 1)
 
 
 class A09HoldoutReuse(TempDirCase):

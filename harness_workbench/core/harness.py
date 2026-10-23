@@ -146,7 +146,10 @@ class Harness:
         return asdict(self)
 
     def to_json(self, *, indent: int = 2) -> str:
-        return json.dumps(self.to_dict(), indent=indent, ensure_ascii=False) + "\n"
+        # Imported here for the same reason as in execution_config_hash: a module-level import is circular.
+        from harness_workbench.experiments.validation import json_dumps_strict
+
+        return json_dumps_strict(self.to_dict(), indent=indent, ensure_ascii=False) + "\n"
 
     def public_components(self) -> dict[str, Any]:
         """The eight executable components as plain data (no id, version, name, notes, lineage)."""
