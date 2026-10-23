@@ -11,7 +11,8 @@ Coverage: sixteen reproductions for A1-A7, A9, A10 and A12 (the two A06 tests ar
 the A01 shadowing test is undecorated since T8 and runs through ``evaluate_bundle``;
 the A04 latency, both A10 and the A12 output-limit tests are undecorated since T9, the grader one runs
 through ``evaluate_bundle``; A02, A09 and the A12 persistence test are undecorated since T18, A02 and A09
-on v2 confirmatory manifests, the A12 crash modelled as a ``BaseException``).
+on v2 confirmatory manifests, the A12 crash modelled as a ``BaseException``; A03 and A04 are undecorated since
+T22, on v2 confirmatory manifests decided by ``stats.decide``).
  * A8 (low statistical power) has no unit reproduction; it is recreated as a
    statistical simulation in T24.
  * A11 (``test_improve_cli_can_require_experiment_validation`` fails outside CI
@@ -39,7 +40,7 @@ from harness_workbench.experiments.backends import LocalBackend, ProcessLimits
 from harness_workbench.experiments.command import CommandHarnessExecutor
 from harness_workbench.experiments.grader import GraderBundle, SnapshotLimits, evaluate_bundle
 from harness_workbench.experiments.manifest import ManifestError
-from harness_workbench.experiments.status import EvaluationStatus
+from harness_workbench.experiments.status import DecisionStatus, EvaluationStatus
 from tests.support import ENV_CANARY, ScriptedExecutor, SimulatedCrash, exact_task, repro, write_manifest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -130,28 +131,34 @@ class A02SingleFinalist(TempDirCase):
 
 
 class A03MinimumUnits(TempDirCase):
-    @repro
     def test_one_task_many_repetitions_is_not_eligible(self) -> None:
         """A3: one task is enough; repetitions of a single task are pseudo-replication yet qualify a candidate."""
-        manifest = write_manifest(self.root / "m", tasks=[exact_task("only")],
-                                  variants=[{"id": "candidate", "system_prompt": "cand"}], repetitions=5)
+        # Converted (T22) to a v2 confirmatory manifest with ONE validation task (and one regression task).
+        manifest = _confirmatory(self.root / "m", tasks=[exact_task("only", split="validation"),
+                                                         exact_task("guard", split="regression")],
+                                 variants=[{"id": "candidate", "system_prompt": "cand"}])
         executor = ScriptedExecutor({"base": lambda t: False, "cand": lambda t: True})
         result = run_experiment(ExperimentSpec.load(manifest), executor, self.root / "out")
-        self.assertFalse(result["summary"]["contrasts"]["candidate"]["eligible"])
+        decision = result["decision"]
+        self.assertEqual(decision["status"], DecisionStatus.INSUFFICIENT_EVIDENCE.value)
+        self.assertEqual(decision["n_units"], 1)
+        self.assertTrue(any("min_independent_units 30" in reason for reason in decision["reasons"]),
+                        decision["reasons"])
 
 
 class A04UsageGates(TempDirCase):
-    @repro
     def test_unknown_baseline_tokens_block(self) -> None:
         """A4: the cost gate fails open; baseline tokens 0 with a 10M-token candidate is still eligible."""
-        tasks = [exact_task(f"t{i}") for i in (1, 2, 3)]
-        manifest = write_manifest(self.root / "m", tasks=tasks,
-                                  variants=[{"id": "candidate", "system_prompt": "cand"}])
+        # Converted (T22) to a v2 confirmatory manifest: the zero baseline makes the token ratio undefined.
+        tasks = [exact_task(f"t{i}", split="validation") for i in (1, 2, 3)] + [exact_task("g1", split="regression")]
+        manifest = _confirmatory(self.root / "m", tasks=tasks, variants=[{"id": "candidate", "system_prompt": "cand"}])
         executor = ScriptedExecutor({"base": lambda t: False, "cand": lambda t: True},
                                     tokens={"base": 0, "cand": 10_000_000})
         result = run_experiment(ExperimentSpec.load(manifest), executor, self.root / "out")
-        decision = result["summary"]["contrasts"]["candidate"]
-        self.assertFalse(decision["eligible"])
+        decision = result["decision"]
+        self.assertEqual(decision["status"], DecisionStatus.INSUFFICIENT_EVIDENCE.value)
+        self.assertIn("token ratio undefined: baseline usage is zero", decision["reasons"])
+        self.assertIsNone(decision["diagnostics"]["token_ratio"])
 
     def test_adapter_latency_is_not_authoritative(self) -> None:
         """A4: the command agent self-reports latency (command.py:99), so a slow command can report zero."""

@@ -5,10 +5,12 @@ import json
 import os
 import unittest
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Sequence
 
 from harness_workbench.core.executor import BehavioralReport, Task
 from harness_workbench.core.harness import Harness
+from harness_workbench.experiments.contracts import EvaluationResult, ExecutionResult, Measurement, TrialRecord
+from harness_workbench.experiments.status import EvaluationStatus, ExecutionStatus, Provenance
 
 # Placed in the parent environment by the A10 reproductions. The value is a
 # literal marker, never a real secret.
@@ -106,3 +108,72 @@ def write_manifest(root: Path, *, tasks: list[dict[str, Any]], variants: list[di
     path = root / "experiment.json"
     path.write_text(json.dumps(manifest), encoding="utf-8")
     return path
+
+
+def _resolve(setting: Any, variant_id: str, task_id: str, repetition: int) -> Any:
+    return setting(variant_id, task_id, repetition) if callable(setting) else setting
+
+
+def make_records(
+    spec: Any,
+    *,
+    score: Callable[[str, str, int], float | None] | float | None = None,
+    tokens: Callable[[str, str, int], Measurement] | Measurement | None = None,
+    latency: Callable[[str, str, int], Measurement] | Measurement | None = None,
+    checks: Callable[[str, str, int], list[dict]] | None = None,
+    variants: Sequence[str] | None = None,
+    splits: Sequence[str] | None = ("validation", "regression"),
+    repetitions: int | None = None,
+) -> list[TrialRecord]:
+    """Synthetic last-attempt trial records for ``spec``: one per (variant, task, repetition).
+
+    ``score(variant_id, task_id, repetition)`` gives the objective score; ``None`` makes the trial unusable
+    (an execution error, never evaluated). ``tokens`` and ``latency`` are a Measurement or a callable
+    returning one (defaults: 100 adapter-reported tokens, 10 ms measured). ``checks`` returns the check
+    results of a usable trial (default: one ``answer`` check that passed iff the score is at least 0.5).
+    ``variants`` defaults to the baseline and the first candidate; ``splits`` picks the tasks (``None``: every
+    task, split or not). The records
+    are labelled synthetic by construction: nothing ran.
+    """
+    baseline_id = spec.variants[0].id
+    chosen = list(variants) if variants is not None else [baseline_id, spec.variants[1].id]
+    default_score = (lambda variant, task, rep: 0.0 if variant == baseline_id else 1.0)
+    score = default_score if score is None else score
+    tokens = Measurement.reported(100, Provenance.ADAPTER_REPORTED) if tokens is None else tokens
+    latency = Measurement.measured(10.0) if latency is None else latency
+    count = spec.repetitions if repetitions is None else repetitions
+    records: list[TrialRecord] = []
+    for task in spec.tasks:
+        label = task.split.value if task.split is not None else "unsplit"
+        if splits is not None and label not in splits:
+            continue
+        for repetition in range(count):
+            for variant_id in chosen:
+                value = _resolve(score, variant_id, task.id, repetition)
+                usable = value is not None
+                trial_id = f"{variant_id}.{task.id}.{repetition}"
+                execution = ExecutionResult(
+                    trial_id=trial_id,
+                    status=ExecutionStatus.COMPLETED if usable else ExecutionStatus.EXECUTION_ERROR,
+                    outputs={}, exit_code=None, stdout_tail="", stderr_tail="",
+                    tokens=_resolve(tokens, variant_id, task.id, repetition),
+                    latency_ms=_resolve(latency, variant_id, task.id, repetition),
+                    adapter_latency_ms=Measurement.unknown(), returned_model=None, artifact_hash=None,
+                    error=None if usable else "synthetic execution error",
+                )
+                if usable:
+                    results = (checks(variant_id, task.id, repetition) if checks is not None else
+                               [{"id": "answer", "type": "exact", "weight": 1.0,
+                                 "status": "passed" if value >= 0.5 else "failed",
+                                 "passed": value >= 0.5, "detail": "synthetic"}])
+                    evaluation = EvaluationResult(
+                        trial_id, EvaluationStatus.PASSED if value >= 0.5 else EvaluationStatus.FAILED,
+                        task.bundle_hash, None, results, float(value), None)
+                else:
+                    evaluation = EvaluationResult(
+                        trial_id, EvaluationStatus.NOT_EVALUATED, task.bundle_hash, None, [], None,
+                        "not evaluated: synthetic")
+                records.append(TrialRecord(
+                    trial_id, variant_id, task.id, label, task.family, repetition,
+                    spec.seed + repetition, 1, execution, evaluation, "synthetic-impl"))
+    return records

@@ -5,21 +5,30 @@ independent samples, so they are averaged out before any bound is computed. ``pa
 candidate and baseline per ``(task, repetition)`` using the last attempt, ``family_units`` averages the
 task deltas of each family, and the bounds below (a seeded cluster percentile bootstrap and a Student t
 bound) are computed over those family units only.
+
+``decide`` turns the records of one experiment into the promotion decision. It fails closed: anything that
+cannot be shown (usage that was never measured, a missing pair, a degenerate interval, a regression group
+the data cannot clear) is never ``ELIGIBLE``.
 """
 from __future__ import annotations
 
 import math
 import random
 import statistics
-from dataclasses import dataclass
-from typing import Iterable, Sequence
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Iterable, Sequence
 
-from .contracts import TrialRecord
+from .contracts import ExperimentDecision, PrivateExperimentPlan, TrialRecord
+from .status import DecisionStatus, Provenance
+
+if TYPE_CHECKING:  # manifest and protocol import contracts only; nothing here needs them at run time
+    from .manifest import ExperimentSpec
+    from .protocol import FrozenSelection
 
 __all__ = [
-    "METHODS", "IncompleteEvidence", "Unit", "cluster_percentile_ci_v1", "cluster_t_v1", "family_units",
-    "lower_bound", "noninferiority", "paired_task_deltas", "reference_lower_bound", "t_quantile",
-    "upper_bound", "zero_variance",
+    "METHODS", "ConflictingEvidence", "IncompleteEvidence", "Unit", "cluster_percentile_ci_v1", "cluster_t_v1",
+    "decide", "family_units", "latest_attempts", "lower_bound", "noninferiority", "paired_task_deltas",
+    "reference_lower_bound", "t_quantile", "upper_bound", "zero_variance",
 ]
 
 METHODS = ("cluster_percentile_ci_v1", "cluster_t_v1")
@@ -27,6 +36,10 @@ METHODS = ("cluster_percentile_ci_v1", "cluster_t_v1")
 
 class IncompleteEvidence(ValueError):
     """The evidence cannot support a statistic: a pair is missing or unusable, or too few units exist."""
+
+
+class ConflictingEvidence(IncompleteEvidence):
+    """Two different records claim the same attempt of one trial: the evidence is ambiguous."""
 
 
 @dataclass(frozen=True)
@@ -41,6 +54,29 @@ class Unit:
 # --- paired deltas and units ---------------------------------------------------------------------------
 
 
+def latest_attempts(records: Iterable[TrialRecord], variants: Iterable[str] | None = None,
+                    ) -> dict[tuple[str, str, int], TrialRecord]:
+    """``(variant, task, repetition)`` -> the record of the highest attempt, for the named variants.
+
+    Two different trials claiming the same attempt of one key cannot be ordered, so that raises
+    ``ConflictingEvidence`` instead of letting list order pick a winner; the same trial listed twice is fine.
+    """
+    wanted = None if variants is None else set(variants)
+    latest: dict[tuple[str, str, int], TrialRecord] = {}
+    for record in records:
+        if wanted is not None and record.variant_id not in wanted:
+            continue
+        key = (record.variant_id, record.task_id, record.repetition)
+        current = latest.get(key)
+        if current is not None and record.attempt == current.attempt and record.trial_id != current.trial_id:
+            raise ConflictingEvidence(
+                f"conflicting records for variant {key[0]!r} task {key[1]!r} repetition {key[2]} "
+                f"attempt {record.attempt}: trials {current.trial_id!r} and {record.trial_id!r}")
+        if current is None or record.attempt > current.attempt:
+            latest[key] = record
+    return latest
+
+
 def paired_task_deltas(
     records: list[TrialRecord],
     *,
@@ -53,15 +89,7 @@ def paired_task_deltas(
 
     A missing or unusable member of any expected pair raises ``IncompleteEvidence`` naming it.
     """
-    wanted = {variant_id, baseline_id}
-    latest: dict[tuple[str, str, int], TrialRecord] = {}
-    for record in records:
-        if record.variant_id not in wanted:
-            continue
-        key = (record.variant_id, record.task_id, record.repetition)
-        current = latest.get(key)
-        if current is None or record.attempt > current.attempt:
-            latest[key] = record
+    latest = latest_attempts(records, {variant_id, baseline_id})
 
     def score(variant: str, task_id: str, repetition: int) -> float:
         record = latest.get((variant, task_id, repetition))
@@ -172,6 +200,9 @@ def t_quantile(p: float, df: int) -> float:
 def _check(values: Sequence[float], alpha: float) -> None:
     if len(values) < 2:
         raise IncompleteEvidence(f"a bound needs at least 2 independent units, got {len(values)}")
+    bad = [value for value in values if not math.isfinite(value)]
+    if bad:
+        raise IncompleteEvidence(f"a bound needs finite unit values, got {len(bad)} non-finite of {len(values)}")
     if not 0.0 < alpha < 1.0:
         raise ValueError(f"alpha must be in (0, 1), got {alpha!r}")
 
@@ -266,3 +297,347 @@ def noninferiority(values: Sequence[float], *, margin: float, alpha: float, iter
 def zero_variance(values: Sequence[float]) -> bool:
     """True when every unit has the same value (or there is at most one): the spread is unobserved."""
     return len(set(values)) <= 1
+
+
+# --- the decision --------------------------------------------------------------------------------------
+
+_HOLDOUT_SPLITS = ("validation", "regression")
+_MAX_LISTED = 10  # trials named one by one in a reason; the rest are counted
+
+_INSUFFICIENT = DecisionStatus.INSUFFICIENT_EVIDENCE
+_REJECTED = DecisionStatus.REJECTED
+Finding = tuple[DecisionStatus, str]
+
+
+def _candidate(spec: "ExperimentSpec", selection: "FrozenSelection | None") -> tuple[str | None, str | None]:
+    """The variant id and execution hash a decision is about: the frozen finalist, else the only candidate."""
+    if selection is not None:
+        return selection.finalist_id, selection.finalist_hash
+    if len(spec.variants) == 2:
+        only = spec.variants[1]
+        return only.id, only.harness.execution_config_hash()
+    return None, None
+
+
+@dataclass
+class _Primary:
+    """The paired comparison of one candidate against the baseline over a set of tasks."""
+
+    task_deltas: dict[str, float] = field(default_factory=dict)
+    units: list[Unit] = field(default_factory=list)
+    error: str | None = None  # why the pairs or the bound could not be computed
+    estimate: float | None = None
+    lower: float | None = None
+
+
+def _compare(spec: "ExperimentSpec", plan: PrivateExperimentPlan, records: list[TrialRecord], candidate_id: str,
+             task_ids: Sequence[str], *, bound: bool = True) -> _Primary:
+    result = _Primary()
+    try:
+        result.task_deltas = paired_task_deltas(
+            records, variant_id=candidate_id, baseline_id=spec.variants[0].id, task_ids=task_ids,
+            repetitions=spec.repetitions)
+        result.units = family_units(result.task_deltas, plan.families)
+    except ConflictingEvidence:
+        raise
+    except IncompleteEvidence as exc:
+        result.error = str(exc)
+        return result
+    if not bound:
+        return result
+    policy = spec.statistics
+    try:
+        result.estimate, result.lower = lower_bound(
+            [unit.value for unit in result.units], method=policy.method, alpha=policy.alpha,
+            iterations=policy.bootstrap_iterations, seed=spec.seed)
+    except IncompleteEvidence as exc:
+        result.error = str(exc)
+    return result
+
+
+def _mean(values: Sequence[float]) -> float:
+    return math.fsum(values) / len(values)
+
+
+def _usage_findings(spec: "ExperimentSpec", scoped: list[TrialRecord], candidate_id: str,
+                    diagnostics: dict[str, Any]) -> list[Finding]:
+    """Token and latency budgets. Usage nobody measured blocks; it is never read as zero or as within budget."""
+    budget = spec.budget
+    baseline_id = spec.variants[0].id
+    usable = [record for record in scoped if record.usable]
+    findings: list[Finding] = []
+
+    accepted = set(budget.accepted_provenance)
+    unknown = sum(1 for r in usable
+                  if r.execution.tokens.provenance.value not in accepted or r.execution.tokens.value is None)
+    diagnostics["unknown_usage_trials"] = unknown
+    if budget.max_token_ratio is not None or budget.absolute_token_limit is not None:
+        base = [r.execution.tokens.value for r in usable if r.variant_id == baseline_id]
+        cand = [r.execution.tokens.value for r in usable if r.variant_id == candidate_id]
+        if unknown:
+            findings.append((_INSUFFICIENT, f"token usage unknown for {unknown} trials"))
+        elif not base or not cand:
+            findings.append((_INSUFFICIENT, "token usage unavailable: no usable trial for the baseline or the candidate"))
+        else:
+            base_mean, cand_mean = _mean(base), _mean(cand)
+            if base_mean > 0:
+                diagnostics["token_ratio"] = cand_mean / base_mean
+            elif budget.absolute_token_limit is None:
+                findings.append((_INSUFFICIENT, "token ratio undefined: baseline usage is zero"))
+            ratio = diagnostics["token_ratio"]
+            if budget.max_token_ratio is not None and ratio is not None and ratio > budget.max_token_ratio:
+                findings.append((_REJECTED, f"token ratio {ratio:.3f} exceeds max_token_ratio {budget.max_token_ratio}"))
+            if budget.absolute_token_limit is not None and cand_mean > budget.absolute_token_limit:
+                findings.append((_REJECTED, f"candidate mean tokens {cand_mean:.1f} exceed absolute_token_limit "
+                                            f"{budget.absolute_token_limit}"))
+    elif not unknown:
+        base = [r.execution.tokens.value for r in usable if r.variant_id == baseline_id]
+        cand = [r.execution.tokens.value for r in usable if r.variant_id == candidate_id]
+        if base and cand and _mean(base) > 0:
+            diagnostics["token_ratio"] = _mean(cand) / _mean(base)
+
+    if budget.max_latency_ratio is None:
+        diagnostics["latency_gate"] = "disabled: no max_latency_ratio"
+        return findings
+    provenance = [r.execution.latency_ms.provenance for r in usable]
+    unknown_latency = sum(1 for item in provenance if item is Provenance.UNKNOWN)
+    not_applicable = sum(1 for item in provenance if item is Provenance.NOT_APPLICABLE)
+    if unknown_latency:
+        diagnostics["latency_gate"] = "blocked: latency unknown"
+        findings.append((_INSUFFICIENT, f"latency unknown for {unknown_latency} trials"))
+    elif provenance and not_applicable == len(provenance):
+        diagnostics["latency_gate"] = "not_applicable: in-process executor"
+    elif not_applicable:
+        diagnostics["latency_gate"] = "blocked: latency not applicable on some trials"
+        findings.append((_INSUFFICIENT, f"latency not applicable for {not_applicable} of {len(provenance)} trials"))
+    else:
+        base = [r.execution.latency_ms.value for r in usable if r.variant_id == baseline_id]
+        cand = [r.execution.latency_ms.value for r in usable if r.variant_id == candidate_id]
+        if not base or not cand:
+            diagnostics["latency_gate"] = "blocked: no usable trial"
+            findings.append((_INSUFFICIENT, "latency unavailable: no usable trial for the baseline or the candidate"))
+        elif _mean(base) <= 0:
+            diagnostics["latency_gate"] = "blocked: baseline latency is zero"
+            findings.append((_INSUFFICIENT, "latency ratio undefined: baseline latency is zero"))
+        else:
+            diagnostics["latency_gate"] = "applied"
+            ratio = diagnostics["latency_ratio"] = _mean(cand) / _mean(base)
+            if ratio > budget.max_latency_ratio:
+                findings.append((_REJECTED, f"latency ratio {ratio:.3f} exceeds max_latency_ratio "
+                                            f"{budget.max_latency_ratio}"))
+    return findings
+
+
+def _regression_findings(spec: "ExperimentSpec", plan: PrivateExperimentPlan, regression: _Primary,
+                         regression_ids: Sequence[str], diagnostics: dict[str, Any]) -> list[Finding]:
+    """Non-inferiority per regression group, with alpha split across the groups (Bonferroni)."""
+    policy = spec.statistics
+    by_family = {unit.id: unit.value for unit in regression.units}
+    groups = {name: tuple(families) for name, families in plan.regression_groups.items()}
+    if not groups and regression_ids:
+        groups = {"regression": tuple(sorted({plan.families[task] for task in regression_ids if task in plan.families}))}
+    group_alpha = policy.alpha / len(groups) if groups else policy.alpha
+    diagnostics["group_alpha"] = group_alpha
+    if regression.error is not None and not regression.units:
+        return []  # the pairs are incomplete: that is already a finding, and there is nothing to bound
+    findings: list[Finding] = []
+    covered = {family for families in groups.values() for family in families}
+    uncovered = sorted(set(by_family) - covered)
+    if uncovered:
+        findings.append((_INSUFFICIENT, f"regression families not covered by any regression group: {', '.join(uncovered)}"))
+    rejected: list[Finding] = []
+    undecided: list[Finding] = []
+    for name, families in groups.items():
+        values = [by_family[family] for family in families if family in by_family]
+        entry: dict[str, Any] = {"units": len(values), "families": list(families), "outcome": "undecided"}
+        diagnostics["noninferiority"][name] = entry
+        kwargs = dict(alpha=group_alpha, iterations=policy.bootstrap_iterations, seed=spec.seed, method=policy.method)
+        try:
+            estimate, outcome = noninferiority(values, margin=policy.regression_margin, **kwargs)
+            entry["estimate"] = estimate
+            entry["lower_bound"] = lower_bound(values, **kwargs)[1]
+            entry["upper_bound"] = upper_bound(values, **kwargs)
+        except IncompleteEvidence as exc:
+            entry["error"] = str(exc)
+            undecided.append((_INSUFFICIENT, f"regression group {name}: {exc}"))
+            continue
+        margin = policy.regression_margin
+        if outcome is True:
+            entry["outcome"] = "non_inferior"
+        elif outcome is False:
+            entry["outcome"] = "regressed"
+            rejected.append((_REJECTED, f"regression group {name}: demonstrated regression (estimate {estimate:.4f}, "
+                                        f"upper bound {entry['upper_bound']:.4f} < -margin {-margin})"))
+        else:
+            undecided.append((_INSUFFICIENT, f"regression group {name}: non-inferiority undecided (estimate "
+                                             f"{estimate:.4f}, lower bound {entry['lower_bound']:.4f} <= -margin {-margin})"))
+    # A demonstrated regression is definitive, so it outranks a group the data cannot decide.
+    return [*rejected, *findings, *undecided]
+
+
+def decide(plan: PrivateExperimentPlan, records: list[TrialRecord], *, spec: "ExperimentSpec",
+           selection: "FrozenSelection | None", integrity_problems: list[str],
+           exploratory_reason: str | None) -> ExperimentDecision:
+    """The promotion decision of one experiment; the first matching rule wins and its reasons accumulate.
+
+    1. ``integrity_problems`` -> ``INVALID_EXPERIMENT``.
+    2. A non-confirmatory or legacy spec -> ``EXPLORATORY_ONLY``. 3. ``exploratory_reason`` -> same.
+    4. A baseline or finalist holdout trial that is not usable -> ``INVALID_EXPERIMENT``.
+    5. A finalist trial failing a critical check -> ``REJECTED``.
+    6. Missing pairs, too few independent units or regression units -> ``INSUFFICIENT_EVIDENCE``.
+    7. Token and latency budgets. 8. The primary bound against the practical margin.
+    9. Non-inferiority per regression group. 10. Otherwise ``ELIGIBLE``.
+
+    Rules 6 to 9 are all evaluated; the status is the first finding's and the reasons are the findings of
+    that status. ``diagnostics`` is filled whenever the data allows, whatever the status.
+    """
+    baseline = spec.variants[0]
+    baseline_id = baseline.id
+    candidate_id, candidate_hash = _candidate(spec, selection)
+    policy = spec.statistics
+    confirmatory = spec.mode == "confirmatory" and not spec.legacy
+    if confirmatory:
+        validation_ids = tuple(plan.splits.get("validation", ()))
+        regression_ids = tuple(plan.splits.get("regression", ()))
+    else:
+        validation_ids, regression_ids = tuple(task.id for task in spec.tasks), ()
+    scope = set(validation_ids) | set(regression_ids)
+
+    diagnostics: dict[str, Any] = {
+        "n_units": 0, "n_regression_units": 0, "repetitions": spec.repetitions, "method": policy.method,
+        "estimate": None, "lower_bound": None, "zero_variance": None, "token_ratio": None, "latency_ratio": None,
+        "latency_gate": None, "task_deltas": {"primary": {}, "regression": {}}, "noninferiority": {},
+        "group_alpha": policy.alpha, "unknown_usage_trials": 0,
+    }
+    findings: list[Finding] = []
+    unusable: list[str] = []
+    critical: list[str] = []
+    conflict: str | None = None
+    primary = _Primary()
+    scoped: list[TrialRecord] = []
+
+    try:
+        latest = latest_attempts(records, {baseline_id, candidate_id} if candidate_id else {baseline_id})
+        scoped = [record for record in latest.values() if record.task_id in scope]
+    except ConflictingEvidence as exc:
+        conflict = str(exc)
+
+    compared: dict[str, _Primary] = {}
+    if conflict is None:
+        # An exploratory comparison shows its numbers for every candidate; a confirmatory one for its own.
+        for variant in (spec.variants[1:] if not confirmatory else ()):
+            try:
+                compared[variant.id] = _compare(spec, plan, records, variant.id, validation_ids)
+            except ConflictingEvidence as exc:
+                conflict = str(exc)
+                break
+        if not confirmatory and conflict is None:
+            diagnostics["per_variant"] = {
+                variant_id: {"n_units": len(other.units), "estimate": other.estimate, "lower_bound": other.lower,
+                             "task_deltas": other.task_deltas, "error": other.error}
+                for variant_id, other in compared.items()}
+    if conflict is None and candidate_id is not None:
+        try:
+            primary = compared.get(candidate_id) or _compare(spec, plan, records, candidate_id, validation_ids)
+        except ConflictingEvidence as exc:
+            conflict = str(exc)
+    if conflict is None and candidate_id is not None:
+        unusable = [record.trial_id for record in scoped if not record.usable]
+        tasks = {task.id: task for task in spec.tasks}
+        for record in scoped:
+            if record.variant_id != candidate_id or not record.usable:
+                continue
+            for check_id in sorted(tasks[record.task_id].critical_check_ids):
+                check = next((c for c in record.evaluation.checks if isinstance(c, dict) and c.get("id") == check_id), None)
+                reason = f"critical invariant {check_id} failed in task {record.task_id}"
+                if (check is None or check.get("passed") is not True) and reason not in critical:
+                    critical.append(reason)
+
+        # rule 6
+        if primary.error is not None and not primary.units:
+            findings.append((_INSUFFICIENT, f"incomplete validation evidence: {primary.error}"))
+        diagnostics["n_units"] = len(primary.units)
+        diagnostics["task_deltas"]["primary"] = dict(primary.task_deltas)
+        if len(primary.units) < policy.min_independent_units:
+            findings.append((_INSUFFICIENT, f"independent units {len(primary.units)} is below "
+                                            f"min_independent_units {policy.min_independent_units}"))
+        regression = _Primary()
+        if confirmatory:
+            regression = _compare(spec, plan, records, candidate_id, regression_ids, bound=False)
+            if regression.error is not None and not regression.units:
+                findings.append((_INSUFFICIENT, f"incomplete regression evidence: {regression.error}"))
+            diagnostics["n_regression_units"] = len(regression.units)
+            diagnostics["task_deltas"]["regression"] = dict(regression.task_deltas)
+            if len(regression.units) < policy.min_regression_units:
+                findings.append((_INSUFFICIENT, f"regression units {len(regression.units)} is below "
+                                                f"min_regression_units {policy.min_regression_units}"))
+        # rule 7
+        findings.extend(_usage_findings(spec, scoped, candidate_id, diagnostics))
+        # rule 8
+        if primary.units:
+            values = [unit.value for unit in primary.units]
+            diagnostics["zero_variance"] = zero_variance(values)
+            if primary.error is not None:
+                findings.append((_INSUFFICIENT, f"primary bound unavailable: {primary.error}"))
+            else:
+                diagnostics["estimate"], diagnostics["lower_bound"] = primary.estimate, primary.lower
+                if diagnostics["zero_variance"] and not policy.allow_zero_variance:
+                    findings.append((_INSUFFICIENT, "degenerate interval: zero variance across units"))
+                elif diagnostics["zero_variance"]:
+                    diagnostics["zero_variance_justification"] = policy.zero_variance_justification
+                if primary.lower <= policy.practical_margin:
+                    findings.append((_REJECTED, f"improvement not supported: lower bound {primary.lower:.4f} <= "
+                                                f"margin {policy.practical_margin}"))
+        # rule 9
+        if confirmatory:
+            findings.extend(_regression_findings(spec, plan, regression, regression_ids, diagnostics))
+
+    if confirmatory:
+        evidence = [record.trial_id for record in scoped]
+    else:
+        evidence = [record.trial_id for record in records]
+    baseline_hash = selection.baseline_hash if selection is not None else baseline.harness.execution_config_hash()
+
+    def decision(status: DecisionStatus, reasons: list[str]) -> ExperimentDecision:
+        pending = list(reasons) if status is DecisionStatus.INSUFFICIENT_EVIDENCE else []
+        return ExperimentDecision(
+            status=status, reasons=reasons, estimate=diagnostics["estimate"], lower_bound=diagnostics["lower_bound"],
+            n_units=diagnostics["n_units"], plan_hash=plan.plan_hash, candidate_id=candidate_id,
+            candidate_hash=candidate_hash, baseline_hash=baseline_hash, baseline_id=baseline.harness.id,
+            baseline_version=baseline.harness.version, evidence_ids=evidence, pending_requirements=pending,
+            diagnostics=diagnostics)
+
+    # rule 1
+    if integrity_problems:
+        return decision(DecisionStatus.INVALID_EXPERIMENT, list(integrity_problems))
+    # rules 2 and 3
+    if not confirmatory or exploratory_reason:
+        reasons = [f"mode is {spec.mode}"] if spec.mode != "confirmatory" else []
+        if spec.legacy:
+            reasons.append("schema v1 manifest")
+        if exploratory_reason:
+            reasons.append(exploratory_reason)
+        return decision(DecisionStatus.EXPLORATORY_ONLY, reasons)
+    if candidate_id is None:
+        return decision(DecisionStatus.INVALID_EXPERIMENT, [
+            "no frozen selection: the experiment has several candidates and none was frozen"])
+    if conflict is not None:
+        return decision(DecisionStatus.INVALID_EXPERIMENT, [conflict])
+    # rule 4
+    if unusable:
+        listed = [f"unresolved execution/evaluation error in trial {trial_id}" for trial_id in unusable[:_MAX_LISTED]]
+        if len(unusable) > _MAX_LISTED:
+            listed.append(f"and {len(unusable) - _MAX_LISTED} more unresolved trials")
+        return decision(DecisionStatus.INVALID_EXPERIMENT, listed)
+    # rule 5
+    if critical:
+        return decision(_REJECTED, critical)
+    # rules 6 to 9
+    if findings:
+        first = findings[0][0]
+        reasons = list(dict.fromkeys(reason for status, reason in findings if status is first))
+        return decision(first, reasons)
+    # rule 10
+    return decision(DecisionStatus.ELIGIBLE, [
+        f"improvement supported: lower bound {primary.lower:.4f} > margin {policy.practical_margin}; "
+        "no integrity, budget or regression block"])

@@ -26,7 +26,7 @@ from harness_workbench.core.executor import BehavioralReport
 from harness_workbench.experiments.backends import ExecutionBackend, ProcessLimits, require_backend
 from harness_workbench.experiments.contracts import (
     TIMEOUT_POLICY_CHECK_ID, EvaluationResult, ExecutionResult, ExperimentDecision, Measurement,
-    PrivateExperimentPlan, PublicTrialRequest, TrialRecord,
+    PublicTrialRequest, TrialRecord,
 )
 # Case, ExperimentSpec, TaskSpec and Variant moved to manifest.py; core re-exports them.
 from harness_workbench.experiments.manifest import Case, ExperimentSpec, Split, TaskSpec, Variant  # noqa: F401
@@ -36,6 +36,7 @@ from harness_workbench.experiments.grader import (
 from harness_workbench.experiments.protocol import (
     FrozenSelection, build_plan, freeze_selection, holdout_fingerprints, select_finalist, verify_frozen,
 )
+from harness_workbench.experiments.stats import decide as default_decide
 from harness_workbench.experiments.status import (
     USABLE_EVALUATION, USABLE_EXECUTION, DecisionStatus, EvaluationStatus, ExecutionStatus, Provenance,
 )
@@ -409,7 +410,9 @@ def compare(spec: ExperimentSpec, records: list[TrialRecord]) -> dict[str, Any]:
     return {"variants": stats, "contrasts": decisions, "pareto_frontier": _pareto(stats),
             "recommended": sorted(
                 [name for name, decision in decisions.items() if decision["eligible"]],
-                key=lambda name: (-decisions[name]["mean_delta"], stats[name]["mean_tokens"], name),
+                # An unknown token mean ranks after every known one: None never meets a float in a comparison.
+                key=lambda name: (-decisions[name]["mean_delta"], stats[name]["mean_tokens"] is None,
+                                  stats[name]["mean_tokens"] or 0.0, name),
             )[:1]}
 
 
@@ -418,7 +421,6 @@ def compare(spec: ExperimentSpec, records: list[TrialRecord]) -> dict[str, Any]:
 # --- orchestration --------------------------------------------------------------------------------
 
 _HOLDOUT_SPLITS = (Split.VALIDATION, Split.REGRESSION)
-_NOT_WIRED = "statistics not yet wired"
 _ELIGIBLE_WITHOUT_RESERVATION = (
     "an eligible verdict needs the frozen finalist of a confirmatory run holding an unblocked holdout "
     "reservation; recorded as exploratory only")
@@ -468,49 +470,6 @@ class _Runner:
                     self.trial(variant, task, repetition)
 
 
-def _candidate(spec: ExperimentSpec, selection: FrozenSelection | None) -> tuple[str | None, str | None]:
-    if selection is not None:
-        return selection.finalist_id, selection.finalist_hash
-    if len(spec.variants) == 2:
-        only = spec.variants[1]
-        return only.id, only.harness.execution_config_hash()
-    return None, None
-
-
-def _interim_decide(plan: PrivateExperimentPlan, records: list[TrialRecord], *, spec: ExperimentSpec,
-                    selection: FrozenSelection | None, integrity_problems: list[str],
-                    exploratory_reason: str | None) -> ExperimentDecision:
-    """The decision until the statistics are wired: never eligible.
-
-    ``INVALID_EXPERIMENT`` for integrity problems, ``EXPLORATORY_ONLY`` for a non-confirmatory spec or a
-    blocked holdout, otherwise ``INSUFFICIENT_EVIDENCE``.
-    """
-    pending: list[str] = []
-    if integrity_problems:
-        status, reasons = DecisionStatus.INVALID_EXPERIMENT, list(integrity_problems)
-    elif spec.mode != "confirmatory" or exploratory_reason:
-        status = DecisionStatus.EXPLORATORY_ONLY
-        reasons = [f"mode is {spec.mode}"] if spec.mode != "confirmatory" else []
-        if spec.legacy:
-            reasons.append("schema v1 manifest")
-        if exploratory_reason:
-            reasons.append(exploratory_reason)
-    else:
-        status, reasons, pending = DecisionStatus.INSUFFICIENT_EVIDENCE, [_NOT_WIRED], [_NOT_WIRED]
-    if spec.mode == "confirmatory":
-        evidence = [record.trial_id for record in records if record.split in {s.value for s in _HOLDOUT_SPLITS}]
-    else:
-        evidence = [record.trial_id for record in records]
-    candidate_id, candidate_hash = _candidate(spec, selection)
-    baseline = spec.variants[0].harness
-    return ExperimentDecision(
-        status=status, reasons=reasons, estimate=None, lower_bound=None, n_units=0, plan_hash=plan.plan_hash,
-        candidate_id=candidate_id, candidate_hash=candidate_hash,
-        baseline_hash=baseline.execution_config_hash(), baseline_id=baseline.id,
-        baseline_version=baseline.version, evidence_ids=evidence, pending_requirements=pending, diagnostics={},
-    )
-
-
 def _guard_eligible(decision: ExperimentDecision, *, spec: ExperimentSpec, selection: FrozenSelection | None,
                     reserved: bool, integrity_problems: list[str],
                     exploratory_reason: str | None) -> ExperimentDecision:
@@ -528,6 +487,34 @@ def _guard_eligible(decision: ExperimentDecision, *, spec: ExperimentSpec, selec
     added = [*integrity_problems, *([exploratory_reason] if exploratory_reason else []), _ELIGIBLE_WITHOUT_RESERVATION]
     return dataclasses.replace(decision, status=status,
                                reasons=[*decision.reasons, *(item for item in added if item not in decision.reasons)])
+
+
+def _earlier_exposure(db: Any, earlier: tuple[str, ...]) -> str | None:
+    """Why a rerun of an interrupted confirmation cannot be eligible, or ``None`` when nothing was exposed.
+
+    The holdout trials an earlier attempt of this candidate already ran were drawn and recorded; letting the
+    rerun draw fresh samples for the same tasks would turn kill-and-rerun into best-of-N (spec section 7).
+    An earlier attempt that died before its first holdout trial exposed nothing.
+    """
+    holdout = {split.value for split in _HOLDOUT_SPLITS}
+    counts = {experiment_id: sum(1 for trial in db.trials(experiment_id) if trial.split in holdout)
+              for experiment_id in earlier}
+    counts = {experiment_id: count for experiment_id, count in counts.items() if count}
+    if not counts:
+        return None
+    return (f"{sum(counts.values())} holdout trial(s) of this candidate were already run by earlier interrupted "
+            f"confirmation(s) {', '.join(counts)}; a rerun cannot select fresh samples, recorded as exploratory only")
+
+
+def _check_evidence(decision: ExperimentDecision, trial_ids: set[str]) -> ExperimentDecision:
+    """A decision may cite only trials that exist in this experiment; anything else makes it invalid."""
+    stray = [trial_id for trial_id in decision.evidence_ids if trial_id not in trial_ids]
+    if not stray:
+        return decision
+    shown = ", ".join(stray[:3]) + (f" and {len(stray) - 3} more" if len(stray) > 3 else "")
+    return dataclasses.replace(
+        decision, status=DecisionStatus.INVALID_EXPERIMENT,
+        reasons=[*decision.reasons, f"decision cites evidence that is not trials of this experiment: {shown}"])
 
 
 def _write_atomic(path: Path, text: str) -> None:
@@ -591,7 +578,7 @@ def run_experiment(spec: ExperimentSpec, executor: Any, root: str | Path, *,
         from harness_workbench.core.db import WorkbenchDB  # imported here: core.db imports this package
         db = WorkbenchDB.open(destination)
     try:
-        return _run(spec, executor, destination, backend, limits, db, decide or _interim_decide)
+        return _run(spec, executor, destination, backend, limits, db, decide or default_decide)
     finally:
         if owned:
             db.close()
@@ -614,6 +601,7 @@ def _run(spec: ExperimentSpec, executor: Any, destination: Path, backend: Execut
     selection: FrozenSelection | None = None
     exploratory_reason: str | None = None
     earlier: tuple[str, ...] = ()
+    rerun_reason: str | None = None  # an interrupted attempt of this candidate already ran holdout trials
     reserved = False
     if confirmatory:
         snapshot = SnapshotLimits(limits.max_files, limits.max_total_bytes)
@@ -637,6 +625,7 @@ def _run(spec: ExperimentSpec, executor: Any, destination: Path, backend: Execut
                 experiment_id=experiment_id)
             exploratory_reason, earlier = reservation.blocked_reason, reservation.earlier_experiment_ids
             reserved = exploratory_reason is None
+            rerun_reason = _earlier_exposure(db, earlier) if reserved else None
             finalist = next(variant for variant in candidates if variant.id == finalist_id)
             problems.extend(verify_frozen(selection, finalist.harness, baseline.harness, plan))
             if not problems:
@@ -652,10 +641,12 @@ def _run(spec: ExperimentSpec, executor: Any, destination: Path, backend: Execut
 
     # Diagnostics first: if they cannot be computed the experiment stays running, with no decision.
     summary = compare(spec, runner.final)
+    why_exploratory = exploratory_reason or rerun_reason
     decision = decide(plan, list(runner.final), spec=spec, selection=selection, integrity_problems=list(problems),
-                      exploratory_reason=exploratory_reason)
-    decision = _guard_eligible(decision, spec=spec, selection=selection, reserved=reserved,
-                               integrity_problems=problems, exploratory_reason=exploratory_reason)
+                      exploratory_reason=why_exploratory)
+    decision = _check_evidence(decision, {record.trial_id for record in runner.attempts})
+    decision = _guard_eligible(decision, spec=spec, selection=selection, reserved=reserved and not rerun_reason,
+                               integrity_problems=problems, exploratory_reason=why_exploratory)
     if earlier:
         decision.diagnostics = {**decision.diagnostics, "earlier_experiment_ids": list(earlier)}
     decision_id = db.record_decision(experiment_id, decision)

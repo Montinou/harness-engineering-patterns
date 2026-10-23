@@ -14,6 +14,7 @@ from harness_workbench.experiments.contracts import (
 )
 from harness_workbench.experiments.stats import (
     METHODS,
+    ConflictingEvidence,
     IncompleteEvidence,
     Unit,
     cluster_percentile_ci_v1,
@@ -88,6 +89,18 @@ class PairedDeltaTests(unittest.TestCase):
         with self.assertRaises(IncompleteEvidence):
             paired_task_deltas(crashed_last, variant_id="cand", task_ids=["t1"], repetitions=2)
 
+    def test_two_records_for_one_attempt_conflict_unless_they_are_the_same_trial(self):
+        records = [trial("baseline", "t1", 0, 0.5), trial("cand", "t1", 0, 0.7)]
+        twin = trial("cand", "t1", 0, 0.1)
+        twin.trial_id = "another-trial"
+        with self.assertRaises(ConflictingEvidence) as ctx:
+            paired_task_deltas(records + [twin], variant_id="cand", task_ids=["t1"], repetitions=1)
+        self.assertIsInstance(ctx.exception, IncompleteEvidence)
+        self.assertIn("t1", str(ctx.exception))
+        # The same trial listed twice is not a conflict.
+        deltas = paired_task_deltas(records + [records[1]], variant_id="cand", task_ids=["t1"], repetitions=1)
+        self.assertAlmostEqual(deltas["t1"], 0.2)
+
     def test_units_are_families_not_repetitions_or_checks(self):
         records = []
         for task in ("a", "b", "c"):
@@ -131,6 +144,20 @@ class BoundTests(unittest.TestCase):
         self.assertEqual(lower_bound(values, method="cluster_t_v1", alpha=0.05, iterations=1, seed=0), (estimate, bound))
         upper = upper_bound(values, method="cluster_t_v1", alpha=0.05, iterations=1, seed=0)
         self.assertAlmostEqual(upper, 5.5 + 1.8331 * sd / math.sqrt(10), delta=1e-3)
+
+    def test_non_finite_values_are_incomplete_evidence_for_every_bound(self):
+        for bad in (float("nan"), float("inf"), float("-inf")):
+            values = [0.1, bad, 0.2, 0.3]
+            for method in METHODS:
+                kwargs = dict(method=method, alpha=0.05, iterations=200, seed=1)
+                with self.assertRaises(IncompleteEvidence, msg=f"lower {method} {bad}"):
+                    lower_bound(values, **kwargs)
+                with self.assertRaises(IncompleteEvidence, msg=f"upper {method} {bad}"):
+                    upper_bound(values, **kwargs)
+                with self.assertRaises(IncompleteEvidence, msg=f"noninferiority {method} {bad}"):
+                    noninferiority(values, margin=0.1, **kwargs)
+            with self.assertRaises(IncompleteEvidence):
+                reference_lower_bound(values, alpha=0.05, iterations=200, seed=1)
 
     def test_bound_needs_two_units(self):
         for method in METHODS:

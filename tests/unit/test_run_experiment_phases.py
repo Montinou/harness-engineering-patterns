@@ -123,7 +123,10 @@ class FinalistTests(PhaseCase):
         stored = self.db().trials(payload["experiment_id"])
         self.assertEqual(len(stored), len(payload["runs"]))
         self.assertEqual(payload["decision"]["status"], DecisionStatus.INSUFFICIENT_EVIDENCE.value)
-        self.assertEqual(payload["decision"]["reasons"], ["statistics not yet wired"])
+        # Decided by the statistics (3 validation families, far below the 30-unit floor), not a placeholder.
+        self.assertIn("independent units 3 is below min_independent_units 30", payload["decision"]["reasons"])
+        self.assertEqual(payload["decision"]["n_units"], 3)
+        self.assertEqual(payload["decision"]["diagnostics"]["n_regression_units"], 1)
         self.assertEqual(payload["decision"]["candidate_id"], "a")
         self.assertIsNone(payload["exposure"]["block_reason"])
         self.assertEqual(sorted(payload["exposure"]["fingerprints"]),
@@ -201,10 +204,25 @@ class ExposureTests(PhaseCase):
         self.assertEqual(len(self.db().trials(interrupted)), 2)
         rerun = self.run_exp(self.spec("m", ("a",)), scripted(a=always))
         self.assertIsNone(rerun["exposure"]["block_reason"])
-        self.assertEqual(rerun["decision"]["status"], DecisionStatus.INSUFFICIENT_EVIDENCE.value)
+        # The interrupted run already ran holdout trials of this candidate: a rerun cannot be eligible, or
+        # kill-and-rerun would draw fresh samples until one passes (spec section 7).
+        self.assertEqual(rerun["decision"]["status"], DecisionStatus.EXPLORATORY_ONLY.value)
+        self.assertTrue(any(interrupted in reason and "2 holdout trial" in reason
+                            for reason in rerun["decision"]["reasons"]), rerun["decision"]["reasons"])
         self.assertEqual(rerun["decision"]["diagnostics"]["earlier_experiment_ids"], [interrupted])
         self.assertEqual(self.db().incomplete_experiments(), [interrupted])
         self.assertEqual(self.query("SELECT COUNT(*) FROM decisions WHERE experiment_id=?", interrupted), [(0,)])
+
+    def test_rerun_after_an_interruption_before_any_holdout_trial_is_not_exposed(self) -> None:
+        spec = self.spec("m", ("a",))
+        with self.assertRaises(Interrupted):
+            self.run_exp(spec, Interrupting(scripted(a=always), on_call=1))
+        (interrupted,) = self.db().incomplete_experiments()
+        self.assertEqual(self.db().trials(interrupted), [])
+        rerun = self.run_exp(self.spec("m", ("a",)), scripted(a=always))
+        self.assertIsNone(rerun["exposure"]["block_reason"])
+        self.assertEqual(rerun["decision"]["status"], DecisionStatus.INSUFFICIENT_EVIDENCE.value)
+        self.assertEqual(rerun["decision"]["diagnostics"]["earlier_experiment_ids"], [interrupted])
 
     def test_an_eligible_verdict_needs_an_unblocked_reservation(self) -> None:
         def eligible(plan, records, *, spec, selection, integrity_problems, exploratory_reason):
@@ -220,6 +238,60 @@ class ExposureTests(PhaseCase):
         self.assertIn(second["exposure"]["block_reason"], second["decision"]["reasons"])
         self.assertEqual(self.query("SELECT status FROM decisions WHERE experiment_id=?", second["experiment_id"]),
                          [(DecisionStatus.EXPLORATORY_ONLY.value,)])
+
+
+class EvidenceTests(PhaseCase):
+    @staticmethod
+    def decision_citing(evidence: list[str]):
+        def decide(plan, records, *, spec, selection, integrity_problems, exploratory_reason):
+            return ExperimentDecision(
+                DecisionStatus.ELIGIBLE, [], 0.5, 0.1, 4, plan.plan_hash, selection.finalist_id,
+                selection.finalist_hash, selection.baseline_hash, spec.variants[0].harness.id,
+                spec.variants[0].harness.version, evidence, [], {})
+        return decide
+
+    def test_a_decision_citing_trials_of_no_such_experiment_is_invalid(self) -> None:
+        payload = self.run_exp(self.spec("m", ("a",)), scripted(a=always),
+                               decide=self.decision_citing(["not-a-trial"]))
+        self.assertEqual(payload["decision"]["status"], DecisionStatus.INVALID_EXPERIMENT.value)
+        self.assertTrue(any("not-a-trial" in reason and "not trials of this experiment" in reason
+                            for reason in payload["decision"]["reasons"]), payload["decision"]["reasons"])
+        self.assertEqual(self.query("SELECT status FROM experiments WHERE experiment_id=?",
+                                    payload["experiment_id"]), [("invalid",)])
+
+    def test_a_decision_citing_its_own_trials_stands(self) -> None:
+        spec = self.spec("m", ("a",))
+        payload = self.run_exp(spec, scripted(a=always), decide=lambda plan, records, **kw: self.decision_citing(
+            [record.trial_id for record in records])(plan, records, **kw))
+        self.assertEqual(payload["decision"]["status"], DecisionStatus.ELIGIBLE.value)
+
+    def test_the_real_decision_cites_the_holdout_trials_of_the_baseline_and_the_finalist(self) -> None:
+        payload = self.run_exp(self.spec("m", ("a", "b")), scripted(a=always, b=never))
+        cited = set(payload["decision"]["evidence_ids"])
+        trials = {record.trial_id: record for record in self.db().trials(payload["experiment_id"])}
+        self.assertTrue(cited and cited <= set(trials))
+        self.assertEqual({trials[trial_id].variant_id for trial_id in cited}, {"baseline", "a"})
+        self.assertEqual({trials[trial_id].task_id for trial_id in cited}, set(HOLDOUT))
+
+
+class EligibleEndToEndTests(PhaseCase):
+    def test_a_run_with_enough_independent_units_is_eligible_and_recorded(self) -> None:
+        tasks = [holdout_task(f"v{i}", "validation") for i in range(30)]
+        tasks += [holdout_task(f"r{i}", "regression") for i in range(30)]
+        spec = self.spec("m", ("a",), tasks=tasks)
+        executor = scripted(a=lambda t: t.startswith("r") or int(t[1:]) % 3 != 0)
+        executor.answers["base"] = lambda t: t.startswith("r")
+        payload = self.run_exp(spec, executor)
+        decision = payload["decision"]
+        self.assertEqual(decision["status"], DecisionStatus.ELIGIBLE.value, decision["reasons"])
+        self.assertEqual(decision["n_units"], 30)
+        self.assertEqual(decision["candidate_id"], "a")
+        self.assertEqual(len(decision["evidence_ids"]), 2 * 60 * REPETITIONS)
+        self.assertEqual(payload["summary"]["recommended"], ["a"])
+        stored = self.db().decision(payload["decision_id"])
+        self.assertEqual(stored.status, DecisionStatus.ELIGIBLE)
+        self.assertEqual(self.query("SELECT status FROM experiments WHERE experiment_id=?",
+                                    payload["experiment_id"]), [("complete",)])
 
 
 class IntegrityTests(PhaseCase):
