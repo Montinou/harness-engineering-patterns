@@ -7,7 +7,7 @@ fix lands, which is the cue to drop the decorator. Run with
 ``HARNESS_REPRO_STRICT=1`` to execute them undecorated and read the real
 assertion failures.
 
-Coverage: sixteen reproductions for A1-A7, A9, A10 and A12.
+Coverage: sixteen reproductions for A1-A7, A9, A10 and A12 (the two A06 tests are undecorated since T5).
  * A8 (low statistical power) has no unit reproduction; it is recreated as a
    statistical simulation in T24.
  * A11 (``test_improve_cli_can_require_experiment_validation`` fails outside CI
@@ -32,6 +32,7 @@ from harness_workbench.core.improver import Improver
 from harness_workbench.experiments import ExperimentSpec, RunContext, run_experiment
 from harness_workbench.experiments.checks import evaluate_checks
 from harness_workbench.experiments.command import CommandHarnessExecutor
+from harness_workbench.experiments.manifest import ManifestError
 from tests.support import ENV_CANARY, ScriptedExecutor, SimulatedCrash, exact_task, repro, write_manifest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -144,23 +145,22 @@ class A06StrictValues(TempDirCase):
         return write_manifest(self.root / "m", tasks=[exact_task(f"t{i}") for i in (1, 2, 3)],
                               variants=[{"id": "candidate", "system_prompt": "cand"}], **overrides)
 
-    @repro
     def test_nan_in_each_gate_parameter_is_rejected(self) -> None:
-        """A6: NaN in max_regression, min_improvement or max_cost_ratio is accepted and disables the gate."""
+        """A6 (fixed in T5): NaN in a gate parameter is a ManifestError at load, not a disabled gate."""
         for key in ("max_regression", "min_improvement", "max_cost_ratio"):
             path = self._manifest(**{key: float("nan")})
-            with self.assertRaises(ValueError, msg=f"{key}=NaN"):
+            with self.assertRaises(ManifestError, msg=f"{key}=NaN"):
                 ExperimentSpec.load(path)
 
-    @repro
     def test_bool_and_infinity_are_rejected(self) -> None:
-        """A6: JSON booleans and Infinity are silently coerced by int()/float() instead of being rejected."""
-        # "repetitions": true is already refused today, but only incidentally (1 < min_samples), so the
-        # reproducible coercions are a boolean seed / min_improvement and an infinite budget ratio.
-        cases = [("seed", True), ("min_improvement", True), ("max_cost_ratio", float("inf"))]
+        """A6 (fixed in T5): JSON booleans and Infinity are rejected instead of coerced by int()/float()."""
+        # "repetitions": true was refused before only incidentally (1 < min_samples); it is now refused
+        # because bool is not an integer. The seed, min_improvement and an infinite budget ratio were coerced.
+        cases = [("repetitions", True), ("seed", True), ("min_improvement", True),
+                 ("max_cost_ratio", float("inf"))]
         for key, value in cases:
             path = self._manifest(**{key: value})
-            with self.assertRaises(ValueError, msg=f"{key}={value!r}"):
+            with self.assertRaises(ManifestError, msg=f"{key}={value!r}"):
                 ExperimentSpec.load(path)
 
 

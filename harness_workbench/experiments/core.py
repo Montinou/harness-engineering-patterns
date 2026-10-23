@@ -6,10 +6,8 @@ uncertainty; only independently verified outcomes can qualify for promotion.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import math
-import os
 import platform
 import random
 import shutil
@@ -22,140 +20,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from harness_workbench.core.executor import BehavioralReport, Task
-from harness_workbench.core.harness import Harness, load_harness
+from harness_workbench.core.executor import BehavioralReport
 from harness_workbench.experiments.checks import evaluate_checks
+# Case, ExperimentSpec, TaskSpec and Variant moved to manifest.py; core re-exports them.
+from harness_workbench.experiments.manifest import Case, ExperimentSpec, TaskSpec, Variant  # noqa: F401
+from harness_workbench.experiments.manifest import digest_path as _digest
 from harness_workbench.experiments.report import render_html
 
 
 def _utc() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _digest(path: Path) -> str:
-    """Content fingerprint including names, permissions and symlink targets."""
-    h = hashlib.sha256()
-    if path.is_file():
-        h.update(path.read_bytes())
-        return h.hexdigest()
-    for item in sorted(path.rglob("*")):
-        rel = item.relative_to(path).as_posix()
-        h.update(rel.encode("utf-8"))
-        if item.is_symlink():
-            h.update(b"SYMLINK")
-            h.update(os.readlink(item).encode("utf-8"))
-        elif item.is_file():
-            h.update(item.read_bytes())
-            h.update(str(item.stat().st_mode & 0o777).encode("ascii"))
-    return h.hexdigest()
-
-
-@dataclass(frozen=True)
-class Case:
-    id: str
-    task: Task
-    checks: tuple[dict[str, Any], ...]
-    fixture: Path | None = None
-    fixture_hash: str | None = None
-
-
-@dataclass(frozen=True)
-class Variant:
-    id: str
-    harness: Harness
-    source: Path
-    fingerprint: str
-
-
-@dataclass(frozen=True)
-class ExperimentSpec:
-    name: str
-    variants: tuple[Variant, ...]
-    cases: tuple[Case, ...]
-    repetitions: int = 5
-    seed: int = 42
-    min_samples: int = 3
-    min_improvement: float = 0.02
-    max_regression: float = 0.05
-    max_cost_ratio: float = 1.5
-    max_latency_ratio: float = 1.5
-    confidence: float = 0.95
-    bootstrap_iterations: int = 2000
-    source: Path | None = None
-    source_hash: str = ""
-    executor_config: dict[str, Any] = field(default_factory=dict)
-
-    @classmethod
-    def load(cls, path: str | Path) -> "ExperimentSpec":
-        source = Path(path).resolve()
-        data = json.loads(source.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            raise ValueError("experiment manifest must be a JSON object")
-        directory = source.parent
-        def resolve(item: str) -> Path:
-            return (directory / item).resolve()
-        names: set[str] = set()
-        variants: list[Variant] = []
-        for item in [{"id": "baseline", "harness": data["baseline"]}, *(data.get("variants") or [])]:
-            identity = str(item["id"])
-            if identity in names or not identity or "/" in identity or "\\" in identity:
-                raise ValueError(f"invalid or duplicate variant id: {identity}")
-            names.add(identity)
-            filename = resolve(str(item["harness"]))
-            variants.append(Variant(identity, load_harness(filename), filename, _digest(filename)))
-        if len(variants) < 2:
-            raise ValueError("at least one candidate variant is required")
-        cases: list[Case] = []
-        case_ids: set[str] = set()
-        for item in data.get("tasks") or []:
-            case_id = str(item["id"])
-            if not case_id or case_id in case_ids:
-                raise ValueError(f"invalid or duplicate task id: {case_id}")
-            case_ids.add(case_id)
-            checks = tuple(item.get("checks") or [])
-            if not checks:
-                raise ValueError(f"task {case_id} has no independent acceptance checks")
-            for check in checks:
-                if float(check.get("weight", 1)) <= 0:
-                    raise ValueError("check weights must be positive")
-            fixture = resolve(str(item["fixture"])) if item.get("fixture") else None
-            if fixture is not None and not fixture.is_dir():
-                raise ValueError(f"fixture is not a directory: {fixture}")
-            cases.append(Case(
-                case_id,
-                Task.from_text(
-                    str(item["description"]), domain=str(item.get("domain", "general")),
-                    task_id=case_id, constraints=list(item.get("constraints") or []),
-                ),
-                checks,
-                fixture,
-                _digest(fixture) if fixture else None,
-            ))
-        if not cases:
-            raise ValueError("at least one task is required")
-        repetitions = int(data.get("repetitions", 5))
-        min_samples = int(data.get("min_samples", 3))
-        if not (1 <= repetitions <= 1000) or not (2 <= min_samples <= repetitions):
-            raise ValueError("require 2 <= min_samples <= repetitions <= 1000")
-        confidence = float(data.get("confidence", 0.95))
-        iterations = int(data.get("bootstrap_iterations", 2000))
-        if not (0.5 < confidence < 1) or not (200 <= iterations <= 20000):
-            raise ValueError("invalid confidence or bootstrap_iterations")
-        for key, minimum in [("min_improvement", 0), ("max_regression", 0), ("max_cost_ratio", 1), ("max_latency_ratio", 1)]:
-            if float(data.get(key, minimum)) < minimum:
-                raise ValueError(f"{key} must be >= {minimum}")
-        return cls(
-            name=str(data.get("name") or source.stem),
-            variants=tuple(variants), cases=tuple(cases),
-            repetitions=repetitions, seed=int(data.get("seed", 42)),
-            min_samples=min_samples, min_improvement=float(data.get("min_improvement", 0.02)),
-            max_regression=float(data.get("max_regression", 0.05)),
-            max_cost_ratio=float(data.get("max_cost_ratio", 1.5)),
-            max_latency_ratio=float(data.get("max_latency_ratio", 1.5)),
-            confidence=confidence, bootstrap_iterations=iterations,
-            source=source, source_hash=_digest(source),
-            executor_config=dict(data.get("executor") or {}),
-        )
 
 
 @dataclass(frozen=True)

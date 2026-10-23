@@ -1,6 +1,6 @@
 """Command line for the Harness Workbench.
 
-Commands: propose, probe, improve, report.
+Commands: propose, probe, improve, experiment, migrate-manifest, report.
 The default path is offline (rule proposer, mock executor).
 """
 
@@ -80,6 +80,13 @@ def build_parser() -> argparse.ArgumentParser:
     _add_provider_args(experiment)
     experiment.add_argument("--json", action="store_true")
     experiment.set_defaults(func=_cmd_experiment)
+
+    migrate = sub.add_parser("migrate-manifest", help="convert a schema v1 experiment manifest to schema v2")
+    migrate.add_argument("--spec", type=Path, required=True, help="schema v1 experiment manifest JSON")
+    migrate.add_argument("--out", type=Path, help="where to write the schema v2 manifest")
+    migrate.add_argument("--splits", type=Path, help="JSON object mapping task id to development|validation|regression")
+    migrate.add_argument("--dry-run", action="store_true", help="print the result and write nothing")
+    migrate.set_defaults(func=_cmd_migrate_manifest)
 
     report = sub.add_parser("report", help="show saved lineage, metrics and lessons")
     report.add_argument("--root", type=Path, default=Path("."))
@@ -222,7 +229,7 @@ def _cmd_improve(args: argparse.Namespace) -> int:
         import hashlib
         from dataclasses import replace
         from harness_workbench.experiments import ExperimentSpec, run_experiment
-        from harness_workbench.experiments.core import Variant
+        from harness_workbench.experiments.manifest import Variant
 
         validation_spec = ExperimentSpec.load(args.validation_spec)
         if validation_spec.executor_config.get("type") == "command":
@@ -234,7 +241,8 @@ def _cmd_improve(args: argparse.Namespace) -> int:
         def gate(before: Harness, candidate: Harness) -> bool:
             def variant(identity: str, value: Harness) -> Variant:
                 fingerprint = hashlib.sha256(value.to_json().encode("utf-8")).hexdigest()
-                return Variant(identity, value, Path("(dynamically-composed)"), fingerprint)
+                return Variant(identity, value, Path("(dynamically-composed)"), fingerprint,
+                               value.execution_config_hash())
 
             controlled = replace(validation_spec, variants=(
                 variant("baseline", before), variant("candidate", candidate),
@@ -301,6 +309,59 @@ def _cmd_experiment(args: argparse.Namespace) -> int:
                 print("    " + "; ".join(verdict["reasons"]))
         print(f"report {result['report_path']}")
         print(f"data   {result['results_path']}")
+    return 0
+
+
+def _rebase_paths(data: dict, source_dir: Path, target_dir: Path) -> None:
+    """Rewrite the manifest's relative paths so they still resolve from ``target_dir``."""
+    def rebased(value: str) -> str:
+        return os.path.relpath((source_dir / value).resolve(), target_dir.resolve())
+
+    if isinstance(data.get("baseline"), str):
+        data["baseline"] = rebased(data["baseline"])
+    for variant in data.get("variants") or []:
+        if isinstance(variant, dict) and isinstance(variant.get("harness"), str):
+            variant["harness"] = rebased(variant["harness"])
+    for task in data.get("tasks") or []:
+        if not isinstance(task, dict):
+            continue
+        for key in ("fixture", "grader_files"):
+            if isinstance(task.get(key), str) and task[key]:
+                task[key] = rebased(task[key])
+
+
+def _cmd_migrate_manifest(args: argparse.Namespace) -> int:
+    from harness_workbench.experiments.manifest import ManifestError, migrate_manifest
+    from harness_workbench.experiments.validation import json_dumps_strict, json_loads_strict
+
+    if not args.dry_run and args.out is None:
+        raise ValueError("--out is required unless --dry-run is given")
+    spec_path = args.spec.resolve()
+    if args.out is not None and args.out.resolve() == spec_path:
+        raise ValueError("refusing to overwrite the input manifest; choose a different --out")
+    try:
+        data = json_loads_strict(spec_path.read_text(encoding="utf-8"))
+        splits = None
+        if args.splits is not None:
+            splits = json_loads_strict(args.splits.read_text(encoding="utf-8"))
+            if not isinstance(splits, dict):
+                raise ManifestError("--splits must be a JSON object mapping task id to split")
+        migrated = migrate_manifest(data, splits=splits)
+    except ManifestError:
+        raise
+    except ValueError as exc:  # includes ValidationError and JSON decode errors
+        raise ManifestError(f"{args.spec}: {exc}") from exc
+    target_dir = (args.out.resolve().parent if args.out is not None else spec_path.parent)
+    _rebase_paths(migrated, spec_path.parent, target_dir)
+    for note in migrated["_migration_notes"]:
+        print(f"warning: {note}", file=sys.stderr)
+    text = json_dumps_strict(migrated, indent=2, ensure_ascii=False) + "\n"
+    if args.dry_run:
+        print(text, end="")
+        return 0
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(text, encoding="utf-8")
+    print(f"wrote {args.out}")
     return 0
 
 
