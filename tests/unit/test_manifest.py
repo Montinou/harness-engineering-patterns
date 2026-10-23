@@ -373,6 +373,13 @@ class ConfirmatoryTests(ManifestCase):
         self.assertEqual(len(spec.tasks[1].controls.negatives), 1)
         self.assertEqual(len(spec.source_hash), 64)
 
+    def test_confirmatory_alpha_and_practical_margin_must_match_profile(self):
+        spec = ExperimentSpec.load(self.write(v2_dict()))
+        for key, value in (("alpha", 0.45), ("practical_margin", 0.0)):
+            with self.assertRaisesRegex(ManifestError, rf"{key} .* differs from the binary_v1 profile value"):
+                dataclasses.replace(
+                    spec, statistics=dataclasses.replace(spec.statistics, **{key: value}))
+
     def test_exploratory_spec_reports_mode_problem(self):
         spec = self.load_dict(v2_dict(mode="exploratory"))
         problems = spec.validate_confirmatory()

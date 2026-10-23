@@ -12,6 +12,7 @@ the data cannot clear) is never ``ELIGIBLE``.
 """
 from __future__ import annotations
 
+import functools
 import math
 import random
 import statistics
@@ -207,12 +208,23 @@ def _check(values: Sequence[float], alpha: float) -> None:
         raise ValueError(f"alpha must be in (0, 1), got {alpha!r}")
 
 
-def _bootstrap_means(values: Sequence[float], iterations: int, seed: int) -> list[float]:
-    if iterations < 1:
-        raise ValueError(f"iterations must be >= 1, got {iterations!r}")
+@functools.lru_cache(maxsize=8)
+def _sorted_bootstrap_means(values: tuple[float, ...], iterations: int, seed: int) -> tuple[float, ...]:
     rng = random.Random(seed)
     n = len(values)
-    return sorted(math.fsum(rng.choices(values, k=n)) / n for _ in range(iterations))
+    return tuple(sorted(math.fsum(rng.choices(values, k=n)) / n for _ in range(iterations)))
+
+
+def _bootstrap_means(values: Sequence[float], iterations: int, seed: int) -> Sequence[float]:
+    """The sorted means of ``iterations`` seeded resamples of whole units.
+
+    Memoized on ``(values, iterations, seed)``: a decision asks for the lower and the upper bound of the same
+    units (and the non-inferiority check asks again), and the answer is a pure function of those arguments.
+    The result is an immutable tuple, so sharing it between callers is safe.
+    """
+    if iterations < 1:
+        raise ValueError(f"iterations must be >= 1, got {iterations!r}")
+    return _sorted_bootstrap_means(tuple(values), iterations, seed)
 
 
 def _quantile(sorted_values: Sequence[float], q: float) -> float:

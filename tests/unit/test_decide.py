@@ -10,10 +10,12 @@ import dataclasses
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 from typing import Any
 
 from harness_workbench.experiments import ExperimentSpec, compare
 from harness_workbench.experiments.contracts import EvaluationResult, ExperimentDecision, Measurement
+from harness_workbench.experiments.profiles import PROFILES
 from harness_workbench.experiments.protocol import build_plan, freeze_selection
 from harness_workbench.experiments.stats import decide
 from harness_workbench.experiments.status import DecisionStatus, EvaluationStatus, Provenance
@@ -391,7 +393,11 @@ class EligibleTests(DecideCase):
         self.assertEqual(ExperimentDecision.from_dict(decision.to_dict()).status, DecisionStatus.ELIGIBLE)
 
     def test_the_t_method_decides_too(self) -> None:
-        spec = with_policy(SPEC, method="cluster_t_v1")
+        # The manifest must match the published profile's method (T23), so the profile table is switched to the
+        # t method for the construction of this spec; the decision rule under test is unchanged.
+        t_profile = dataclasses.replace(PROFILES["binary_v1"], method="cluster_t_v1")
+        with mock.patch.dict(PROFILES, {"binary_v1": t_profile}):
+            spec = with_policy(SPEC, method="cluster_t_v1")
         decision = run_decide(spec, make_records(spec, score=good_score))
         self.assertStatus(decision, DecisionStatus.ELIGIBLE)
         self.assertEqual(decision.diagnostics["method"], "cluster_t_v1")

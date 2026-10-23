@@ -21,6 +21,7 @@ from typing import Any
 from harness_workbench.core.executor import Task
 from harness_workbench.core.harness import ALL_COMPONENTS, Harness, load_harness
 from harness_workbench.experiments.grader import GraderBundle, digest_path
+from harness_workbench.experiments.profiles import PROFILES
 from harness_workbench.experiments.status import Provenance
 from harness_workbench.experiments.validation import (
     ValidationError,
@@ -48,17 +49,6 @@ EXPERIMENT_MODES = ("exploratory", "confirmatory")
 _BARE_PYTHON = frozenset({"python", "python3"})
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _PLACEHOLDER = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*\}")
-
-# Floors a confirmatory manifest must meet. T23 replaces this table with the
-# calibrated ``PROFILES`` of ``profiles.py``; the values are the ``binary_v1``
-# defaults (``StatisticsPolicy`` defaults plus five repetitions).
-_PROFILE_FLOORS: dict[str, dict[str, int]] = {
-    "binary_v1": {
-        "repetitions": 5, "min_independent_units": 30,
-        "min_regression_units": 30, "bootstrap_iterations": 10000,
-    },
-}
-
 
 class ManifestError(ValidationError):
     """Raised when an experiment manifest is invalid."""
@@ -854,19 +844,30 @@ class ExperimentSpec:
                     problems.append(
                         f"near-duplicate descriptions between families: {first.id}:{second.id} "
                         "(list the pair in duplicate_review once reviewed)")
-        floors = _PROFILE_FLOORS.get(self.statistics.profile)
-        if floors is None:
+        profile = PROFILES.get(self.statistics.profile)
+        if profile is None:
             problems.append(f"statistics.profile {self.statistics.profile!r} is not a known profile")
         else:
-            checks = (
-                ("repetitions", self.repetitions), ("min_independent_units", self.statistics.min_independent_units),
-                ("min_regression_units", self.statistics.min_regression_units),
-                ("bootstrap_iterations", self.statistics.bootstrap_iterations),
+            # The sampling plan may exceed the profile but never fall below it; the decision rule itself
+            # (method, error rate, margins) is part of what the profile published and must match exactly.
+            floors = (
+                ("repetitions", self.repetitions, profile.repetitions),
+                ("min_independent_units", self.statistics.min_independent_units, profile.min_independent_units),
+                ("min_regression_units", self.statistics.min_regression_units, profile.min_regression_units),
+                ("bootstrap_iterations", self.statistics.bootstrap_iterations, profile.bootstrap_iterations),
             )
-            for key, value in checks:
-                if value < floors[key]:
-                    problems.append(
-                        f"{key} {value} is below the {self.statistics.profile} profile minimum {floors[key]}")
+            for key, value, floor in floors:
+                if value < floor:
+                    problems.append(f"{key} {value} is below the {profile.id} profile minimum {floor}")
+            exact = (
+                ("method", self.statistics.method, profile.method),
+                ("regression_margin", self.statistics.regression_margin, profile.regression_margin),
+                ("alpha", self.statistics.alpha, profile.alpha),
+                ("practical_margin", self.statistics.practical_margin, profile.practical_margin),
+            )
+            for key, value, published in exact:
+                if value != published:
+                    problems.append(f"{key} {value!r} differs from the {profile.id} profile value {published!r}")
         if baseline is not None:
             for variant in candidates:
                 if variant.config_hash == baseline.config_hash:
