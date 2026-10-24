@@ -1,24 +1,46 @@
-"""Reproductions of the audit findings A1-A12 (run-02, commit 73bcb130).
+"""Reproductions of the audit findings A1-A12 (run-02, commit 73bcb130), all passing.
 
-Every test is decorated ``@repro`` (``tests.support``), so each one is an
-*expected failure* while the defect exists: the default suite stays green, and a
-test that starts passing is reported as an "unexpected success" the moment its
-fix lands, which is the cue to drop the decorator. Run with
-``HARNESS_REPRO_STRICT=1`` to execute them undecorated and read the real
-assertion failures.
+Each test was written first as an expected failure that showed the defect, and its marker was dropped in the
+task that fixed the defect. No test here is marked as an expected failure any more
+(``tests/integration/test_end_to_end.py::ReproductionClosure::test_no_repro_decorators_remain`` scans this
+module's source for the marker). ``tests.support.repro`` still exists as a helper but nothing here uses it.
+Sixteen tests in ten classes; the class, the finding it closes and the plan task that closed it:
 
-Coverage: sixteen reproductions for A1-A7, A9, A10 and A12 (the two A06 tests are undecorated since T5;
-the A01 shadowing test is undecorated since T8 and runs through ``evaluate_bundle``;
-the A04 latency, both A10 and the A12 output-limit tests are undecorated since T9, the grader one runs
-through ``evaluate_bundle``; A02, A09 and the A12 persistence test are undecorated since T18, A02 and A09
-on v2 confirmatory manifests, the A12 crash modelled as a ``BaseException``; A03 and A04 are undecorated since
-T22, on v2 confirmatory manifests decided by ``stats.decide``; the A12 implementation-hash test since T25).
- * A8 (low statistical power) has no unit reproduction; it is recreated as a
-   statistical simulation in T24.
- * A11 (``test_improve_cli_can_require_experiment_validation`` fails outside CI
-   because it needs ``python`` on PATH and an importable package) is covered by
-   that pre-existing failing test in ``tests/test_experiments.py``; it is not
-   duplicated here.
+ * ``A01GraderIntegrity``: A1 (the grader ran in the solver's workspace). ``test_rewritten_check_script_still_fails``
+   closed in T7 (frozen grader bundle evaluated outside the workspace); ``test_shadowed_unittest_module_cannot_pass``
+   in T8 (shadowing suite, run through ``evaluate_bundle``).
+ * ``A02SingleFinalist``: A2 (no held-out split, any variant could win). T18 (one frozen finalist, phased runner),
+   on a v2 confirmatory manifest.
+ * ``A03MinimumUnits``: A3 (pseudo-replication: one task repeated). T22 (``stats.decide`` counts independent
+   units; the floor became 50 in T24), on a v2 confirmatory manifest.
+ * ``A04UsageGates``: A4 (cost and latency gates failed open). ``test_adapter_latency_is_not_authoritative``
+   closed in T9 (supervisor-measured latency); ``test_unknown_baseline_tokens_block`` in T22 (fail-closed
+   budgets in ``decide``).
+ * ``A05GraderErrors``: A5 (a grader infrastructure error counted as a quality failure). T7
+   (``evaluation_error`` with no score).
+ * ``A06StrictValues``: A6 (NaN, booleans and infinity coerced). Both tests closed in T5 (manifest schema v2
+   on the strict numeric validation of T2).
+ * ``A07ConcurrentLineage``: A7 (concurrent writers renumbered the base). T13 (SQLite source of truth, no base
+   renumbering, JSON views exported).
+ * ``A09HoldoutReuse``: A9 (the validation set was reused, renaming task ids hid it). T18 (per-task content
+   fingerprints reserved before the first holdout trial), on v2 confirmatory manifests.
+ * ``A10EnvironmentSecrets``: A10 (the solver and the grader inherited the parent environment). Both tests closed
+   in T9 (allowlisted minimal environment).
+ * ``A12Traceability``: A12 (no traceability). ``test_unbounded_solver_output_is_limited`` closed in T9 (output
+   caps); ``test_trial_evidence_persisted_before_suite_end`` in T18 (per-trial persistence; the crash is a
+   ``BaseException`` since an adapter exception is one failed trial by design);
+   ``test_results_carry_implementation_hash`` in T25 (provenance record with the implementation hash).
+
+Not reproduced here:
+ * A8 (low statistical power) has no unit reproduction. It is recreated as a statistical simulation over the real
+   selection and decision functions in ``tests/statistical`` (simulator T23, pre-registered calibration and the
+   A2/A3/A8 recreations T24); the figures are synthetic.
+ * A11 (``test_improve_cli_can_require_experiment_validation`` failed outside CI because it needed ``python`` on
+   PATH and an importable package) is covered by that pre-existing test in ``tests/test_experiments.py`` (its
+   expectation changed in T20: the improve gate accepts only a confirmatory spec) and by the portability tests of
+   T26 in ``tests/integration/test_portability.py``; it is not duplicated here.
+
+``docs/audit-remediation.md`` maps every finding to its change, its tests and their local result.
 """
 from __future__ import annotations
 
@@ -41,7 +63,7 @@ from harness_workbench.experiments.command import CommandHarnessExecutor
 from harness_workbench.experiments.grader import GraderBundle, SnapshotLimits, evaluate_bundle
 from harness_workbench.experiments.manifest import ManifestError
 from harness_workbench.experiments.status import DecisionStatus, EvaluationStatus
-from tests.support import ENV_CANARY, ScriptedExecutor, SimulatedCrash, exact_task, repro, write_manifest
+from tests.support import ENV_CANARY, ScriptedExecutor, SimulatedCrash, exact_task, write_manifest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
