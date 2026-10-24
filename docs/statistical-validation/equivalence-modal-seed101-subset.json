@@ -1,0 +1,114 @@
+{
+  "synthetic": true,
+  "profile": "binary_v1",
+  "overrides": {
+    "method": "cluster_percentile_ci_v1",
+    "min_independent_units": 50,
+    "min_regression_units": 80,
+    "regression_margin": 0.1
+  },
+  "method": "cluster_percentile_ci_v1",
+  "seed": 101,
+  "simulations": {
+    "null": 1000
+  },
+  "matrix": "full",
+  "unknown_usage": false,
+  "interval": {
+    "kind": "wilson",
+    "z": 1.6448536269514722,
+    "meaning": "one-sided 95 % bounds on the promotion rate (spec 5.4)"
+  },
+  "notes": [],
+  "scenarios": [
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "boundary-d1",
+        "kind": "null",
+        "n_units": 50,
+        "regression_units": 80,
+        "repetitions": 5,
+        "dev_candidates": 1,
+        "dev_units": 50,
+        "outcome": "binary",
+        "p_base": 0.5,
+        "effect": 0.05,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 1000,
+      "promoted": 57,
+      "rate": 0.057,
+      "lower_95": 0.04609317043906952,
+      "upper_95": 0.07029747307135831,
+      "status_counts": {
+        "eligible": 57,
+        "insufficient_evidence": 5,
+        "rejected": 938
+      },
+      "reason_counts": {
+        "improvement not supported: lower bound # <= margin #": 938,
+        "improvement supported: lower bound # > margin #; no integrity, budget or regression block": 57,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 5
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 101
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "regression-blocked",
+        "kind": "null",
+        "n_units": 50,
+        "regression_units": 80,
+        "repetitions": 5,
+        "dev_candidates": 5,
+        "dev_units": 50,
+        "outcome": "binary",
+        "p_base": 0.5,
+        "effect": 0.2,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": -0.1,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 1000,
+      "promoted": 48,
+      "rate": 0.048,
+      "lower_95": 0.03804882433592359,
+      "upper_95": 0.06039038755281992,
+      "status_counts": {
+        "eligible": 48,
+        "insufficient_evidence": 865,
+        "rejected": 87
+      },
+      "reason_counts": {
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 865,
+        "regression group regression: demonstrated regression (estimate #, upper bound # < -margin #)": 56,
+        "improvement supported: lower bound # > margin #; no integrity, budget or regression block": 48,
+        "improvement not supported: lower bound # <= margin #": 35
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 101
+    }
+  ],
+  "implementation_hash": "ee30a2d0857e8822436dba882a30a7d91f7780591653cdef90adb57dfd94edae",
+  "python": "3.14.2 x86_64",
+  "wall_seconds": 66.49563758296426,
+  "runner": {
+    "kind": "modal",
+    "chunk_simulations": 250,
+    "chunks": 8,
+    "remote_python": [
+      "3.14.2 x86_64"
+    ],
+    "equivalence": "per-index RNG random.Random(f'{seed}:{scenario.id}:{index}'); chunk counters summed"
+  }
+}

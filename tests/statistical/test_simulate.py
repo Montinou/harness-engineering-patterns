@@ -45,11 +45,11 @@ def scenario_by_id(matrix, scenario_id):
 
 
 class ProfileTests(unittest.TestCase):
-    def test_binary_v1_is_published_with_the_brief_values(self):
+    def test_binary_v1_is_published_with_the_selected_values(self):
         self.assertIsInstance(BASE, StatisticalProfile)
         self.assertEqual(
             dataclasses.astuple(BASE),
-            ("binary_v1", "cluster_percentile_ci_v1", 0.05, 0.05, 0.05, 30, 30, 5, 10000, "binary", (0.5, 0.7),
+            ("binary_v1", "cluster_percentile_ci_v1", 0.05, 0.05, 0.10, 50, 80, 5, 10000, "binary", (0.5, 0.7),
              "docs/statistical-validation.md"))
 
     def test_the_calibration_grid_is_the_pre_registered_one(self):
@@ -78,7 +78,7 @@ class ProfileEnforcementTests(manifest_tests.ManifestCase):
             manifest_tests.v2_dict(statistics={"method": "cluster_t_v1"}), "method", "cluster_t_v1", "binary_v1")
         self.assertIn(BASE.method, message)
         self.assert_confirmatory_problem(
-            manifest_tests.v2_dict(statistics={"regression_margin": 0.10}), "regression_margin", "binary_v1")
+            manifest_tests.v2_dict(statistics={"regression_margin": 0.05}), "regression_margin", "binary_v1")
 
     def test_a_manifest_above_the_profile_floors_still_loads(self):
         self.load_dict(manifest_tests.v2_dict(
@@ -86,9 +86,9 @@ class ProfileEnforcementTests(manifest_tests.ManifestCase):
                                        "bootstrap_iterations": 20000}))
 
     def test_floors_are_read_from_the_profile_table(self):
-        raised = dataclasses.replace(BASE, min_independent_units=50)
+        raised = dataclasses.replace(BASE, min_independent_units=60)
         with mock.patch.dict(PROFILES, {"binary_v1": raised}):
-            self.assert_confirmatory_problem(manifest_tests.v2_dict(), "min_independent_units", "50")
+            self.assert_confirmatory_problem(manifest_tests.v2_dict(), "min_independent_units", "60")
 
     def test_an_exploratory_manifest_is_not_held_to_the_profile(self):
         self.load_dict(manifest_tests.v2_dict(mode="exploratory", statistics={"method": "cluster_t_v1"}))

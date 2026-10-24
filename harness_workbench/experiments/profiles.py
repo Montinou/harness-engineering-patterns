@@ -5,8 +5,8 @@ of independent units, bootstrap iterations) that a confirmatory manifest must me
 compares a manifest against ``PROFILES[policy.profile]``; the Monte Carlo simulator (``simulate.py``) runs
 the real selection and decision functions to show what a profile does to the error rates.
 
-``binary_v1`` is provisional until the pre-registered calibration (``docs/statistical-validation.md``, T24)
-rewrites its sampling plan from the grid result. ``alpha`` and ``practical_margin`` are never part of that
+``binary_v1`` carries the sampling plan, regression tolerance and method selected by the pre-registered
+calibration (``docs/statistical-validation.md``). ``alpha`` and ``practical_margin`` are never part of that
 grid: they are chosen before looking at any simulation.
 """
 from __future__ import annotations
@@ -60,7 +60,7 @@ class StatisticalProfile:
 PROFILES: dict[str, StatisticalProfile] = {
     "binary_v1": StatisticalProfile(
         id="binary_v1", method="cluster_percentile_ci_v1", alpha=0.05, practical_margin=0.05,
-        regression_margin=0.05, min_independent_units=30, min_regression_units=30, repetitions=5,
+        regression_margin=0.10, min_independent_units=50, min_regression_units=80, repetitions=5,
         bootstrap_iterations=10000, outcome="binary", target_effect=(0.5, 0.7),
         calibration_doc="docs/statistical-validation.md"),
 }

@@ -1,0 +1,2000 @@
+{
+  "synthetic": true,
+  "profile": "binary_v1",
+  "scope": "null scenarios only (selection recheck, ADR 0002)",
+  "overrides": {
+    "method": "cluster_percentile_ci_v1",
+    "min_independent_units": 60,
+    "min_regression_units": 80,
+    "regression_margin": 0.1
+  },
+  "method": "cluster_percentile_ci_v1",
+  "seed": 104,
+  "simulations": {
+    "null": 20000
+  },
+  "matrix": "full",
+  "unknown_usage": false,
+  "interval": {
+    "kind": "wilson",
+    "z": 1.6448536269514722,
+    "meaning": "one-sided 95 % bounds on the promotion rate (spec 5.4)"
+  },
+  "null_upper_bound": 0.06,
+  "scenarios_expected": 54,
+  "stopped_at": null,
+  "scenarios": [
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "boundary-d1",
+        "kind": "null",
+        "n_units": 60,
+        "regression_units": 80,
+        "repetitions": 5,
+        "dev_candidates": 1,
+        "dev_units": 60,
+        "outcome": "binary",
+        "p_base": 0.5,
+        "effect": 0.05,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 882,
+      "rate": 0.0441,
+      "lower_95": 0.0417730109048161,
+      "upper_95": 0.04655031813765193,
+      "status_counts": {
+        "eligible": 882,
+        "insufficient_evidence": 115,
+        "rejected": 19003
+      },
+      "reason_counts": {
+        "improvement not supported: lower bound # <= margin #": 19003,
+        "improvement supported: lower bound # > margin #; no integrity, budget or regression block": 882,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 115
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "boundary-d5",
+        "kind": "null",
+        "n_units": 60,
+        "regression_units": 80,
+        "repetitions": 5,
+        "dev_candidates": 5,
+        "dev_units": 60,
+        "outcome": "binary",
+        "p_base": 0.5,
+        "effect": 0.05,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 665,
+      "rate": 0.03325,
+      "lower_95": 0.0312270337789301,
+      "upper_95": 0.035399230381131214,
+      "status_counts": {
+        "eligible": 665,
+        "insufficient_evidence": 87,
+        "rejected": 19248
+      },
+      "reason_counts": {
+        "improvement not supported: lower bound # <= margin #": 19248,
+        "improvement supported: lower bound # > margin #; no integrity, budget or regression block": 665,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 87
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "boundary-d20",
+        "kind": "null",
+        "n_units": 60,
+        "regression_units": 80,
+        "repetitions": 5,
+        "dev_candidates": 20,
+        "dev_units": 60,
+        "outcome": "binary",
+        "p_base": 0.5,
+        "effect": 0.05,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 469,
+      "rate": 0.02345,
+      "lower_95": 0.02175332269437045,
+      "upper_95": 0.02527559253964609,
+      "status_counts": {
+        "eligible": 469,
+        "insufficient_evidence": 70,
+        "rejected": 19461
+      },
+      "reason_counts": {
+        "improvement not supported: lower bound # <= margin #": 19461,
+        "improvement supported: lower bound # > margin #; no integrity, budget or regression block": 469,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 70
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "regression-blocked",
+        "kind": "null",
+        "n_units": 60,
+        "regression_units": 80,
+        "repetitions": 5,
+        "dev_candidates": 5,
+        "dev_units": 60,
+        "outcome": "binary",
+        "p_base": 0.5,
+        "effect": 0.2,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": -0.1,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 969,
+      "rate": 0.04845,
+      "lower_95": 0.04601317386917192,
+      "upper_95": 0.05100897842108129,
+      "status_counts": {
+        "eligible": 969,
+        "insufficient_evidence": 17689,
+        "rejected": 1342
+      },
+      "reason_counts": {
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 17689,
+        "regression group regression: demonstrated regression (estimate #, upper bound # < -margin #)": 1034,
+        "improvement supported: lower bound # > margin #; no integrity, budget or regression block": 969,
+        "improvement not supported: lower bound # <= margin #": 323
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "hetero-null",
+        "kind": "null",
+        "n_units": 60,
+        "regression_units": 80,
+        "repetitions": 5,
+        "dev_candidates": 5,
+        "dev_units": 60,
+        "outcome": "binary",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.2
+      },
+      "simulations": 20000,
+      "promoted": 33,
+      "rate": 0.00165,
+      "lower_95": 0.0012405913007248115,
+      "upper_95": 0.0021942212202533504,
+      "status_counts": {
+        "eligible": 33,
+        "insufficient_evidence": 6,
+        "rejected": 19961
+      },
+      "reason_counts": {
+        "improvement not supported: lower bound # <= margin #": 19961,
+        "improvement supported: lower bound # > margin #; no integrity, budget or regression block": 33,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 6
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "famcorr-null",
+        "kind": "null",
+        "n_units": 60,
+        "regression_units": 80,
+        "repetitions": 5,
+        "dev_candidates": 5,
+        "dev_units": 60,
+        "outcome": "binary",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 3,
+        "family_correlation": 0.5,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 0,
+      "rate": 0.0,
+      "lower_95": 0.0,
+      "upper_95": 0.00013525887526654137,
+      "status_counts": {
+        "rejected": 20000
+      },
+      "reason_counts": {
+        "improvement not supported: lower bound # <= margin #": 20000
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d1-n10-r1-binary",
+        "kind": "null",
+        "n_units": 10,
+        "regression_units": 10,
+        "repetitions": 1,
+        "dev_candidates": 1,
+        "dev_units": 10,
+        "outcome": "binary",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 0,
+      "rate": 0.0,
+      "lower_95": 0.0,
+      "upper_95": 0.00013525887526654137,
+      "status_counts": {
+        "insufficient_evidence": 20000
+      },
+      "reason_counts": {
+        "independent units # is below min_independent_units #": 20000,
+        "regression units # is below min_regression_units #": 20000,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 16983,
+        "degenerate interval: zero variance across units": 18
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d1-n10-r1-continuous",
+        "kind": "null",
+        "n_units": 10,
+        "regression_units": 10,
+        "repetitions": 1,
+        "dev_candidates": 1,
+        "dev_units": 10,
+        "outcome": "continuous",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 0,
+      "rate": 0.0,
+      "lower_95": 0.0,
+      "upper_95": 0.00013525887526654137,
+      "status_counts": {
+        "insufficient_evidence": 20000
+      },
+      "reason_counts": {
+        "independent units # is below min_independent_units #": 20000,
+        "regression units # is below min_regression_units #": 20000,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 10297
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d1-n10-r3-binary",
+        "kind": "null",
+        "n_units": 10,
+        "regression_units": 10,
+        "repetitions": 3,
+        "dev_candidates": 1,
+        "dev_units": 10,
+        "outcome": "binary",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 0,
+      "rate": 0.0,
+      "lower_95": 0.0,
+      "upper_95": 0.00013525887526654137,
+      "status_counts": {
+        "insufficient_evidence": 20000
+      },
+      "reason_counts": {
+        "independent units # is below min_independent_units #": 20000,
+        "regression units # is below min_regression_units #": 20000,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 15595
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d1-n10-r3-continuous",
+        "kind": "null",
+        "n_units": 10,
+        "regression_units": 10,
+        "repetitions": 3,
+        "dev_candidates": 1,
+        "dev_units": 10,
+        "outcome": "continuous",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 0,
+      "rate": 0.0,
+      "lower_95": 0.0,
+      "upper_95": 0.00013525887526654137,
+      "status_counts": {
+        "insufficient_evidence": 20000
+      },
+      "reason_counts": {
+        "independent units # is below min_independent_units #": 20000,
+        "regression units # is below min_regression_units #": 20000,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 3196
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d1-n10-r5-binary",
+        "kind": "null",
+        "n_units": 10,
+        "regression_units": 10,
+        "repetitions": 5,
+        "dev_candidates": 1,
+        "dev_units": 10,
+        "outcome": "binary",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 0,
+      "rate": 0.0,
+      "lower_95": 0.0,
+      "upper_95": 0.00013525887526654137,
+      "status_counts": {
+        "insufficient_evidence": 20000
+      },
+      "reason_counts": {
+        "independent units # is below min_independent_units #": 20000,
+        "regression units # is below min_regression_units #": 20000,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 14152
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d1-n10-r5-continuous",
+        "kind": "null",
+        "n_units": 10,
+        "regression_units": 10,
+        "repetitions": 5,
+        "dev_candidates": 1,
+        "dev_units": 10,
+        "outcome": "continuous",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 0,
+      "rate": 0.0,
+      "lower_95": 0.0,
+      "upper_95": 0.00013525887526654137,
+      "status_counts": {
+        "insufficient_evidence": 20000
+      },
+      "reason_counts": {
+        "independent units # is below min_independent_units #": 20000,
+        "regression units # is below min_regression_units #": 20000,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 884
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d1-n10-r10-binary",
+        "kind": "null",
+        "n_units": 10,
+        "regression_units": 10,
+        "repetitions": 10,
+        "dev_candidates": 1,
+        "dev_units": 10,
+        "outcome": "binary",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 0,
+      "rate": 0.0,
+      "lower_95": 0.0,
+      "upper_95": 0.00013525887526654137,
+      "status_counts": {
+        "insufficient_evidence": 20000
+      },
+      "reason_counts": {
+        "independent units # is below min_independent_units #": 20000,
+        "regression units # is below min_regression_units #": 20000,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 11287
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d1-n10-r10-continuous",
+        "kind": "null",
+        "n_units": 10,
+        "regression_units": 10,
+        "repetitions": 10,
+        "dev_candidates": 1,
+        "dev_units": 10,
+        "outcome": "continuous",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 0,
+      "rate": 0.0,
+      "lower_95": 0.0,
+      "upper_95": 0.00013525887526654137,
+      "status_counts": {
+        "insufficient_evidence": 20000
+      },
+      "reason_counts": {
+        "independent units # is below min_independent_units #": 20000,
+        "regression units # is below min_regression_units #": 20000,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 26
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d1-n60-r1-binary",
+        "kind": "null",
+        "n_units": 60,
+        "regression_units": 80,
+        "repetitions": 1,
+        "dev_candidates": 1,
+        "dev_units": 60,
+        "outcome": "binary",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 85,
+      "rate": 0.00425,
+      "lower_95": 0.0035575129992554523,
+      "upper_95": 0.005076596175571323,
+      "status_counts": {
+        "eligible": 85,
+        "insufficient_evidence": 149,
+        "rejected": 19766
+      },
+      "reason_counts": {
+        "improvement not supported: lower bound # <= margin #": 19766,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 149,
+        "improvement supported: lower bound # > margin #; no integrity, budget or regression block": 85,
+        "regression group regression: demonstrated regression (estimate #, upper bound # < -margin #)": 33
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d1-n60-r1-continuous",
+        "kind": "null",
+        "n_units": 60,
+        "regression_units": 80,
+        "repetitions": 1,
+        "dev_candidates": 1,
+        "dev_units": 60,
+        "outcome": "continuous",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 6,
+      "rate": 0.0003,
+      "lower_95": 0.00015514182357496674,
+      "upper_95": 0.0005800358963664147,
+      "status_counts": {
+        "eligible": 6,
+        "rejected": 19994
+      },
+      "reason_counts": {
+        "improvement not supported: lower bound # <= margin #": 19994,
+        "improvement supported: lower bound # > margin #; no integrity, budget or regression block": 6
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d1-n60-r3-binary",
+        "kind": "null",
+        "n_units": 60,
+        "regression_units": 80,
+        "repetitions": 3,
+        "dev_candidates": 1,
+        "dev_units": 60,
+        "outcome": "binary",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 58,
+      "rate": 0.0029,
+      "lower_95": 0.002338242711216927,
+      "upper_95": 0.003596231662573068,
+      "status_counts": {
+        "eligible": 58,
+        "insufficient_evidence": 25,
+        "rejected": 19917
+      },
+      "reason_counts": {
+        "improvement not supported: lower bound # <= margin #": 19917,
+        "improvement supported: lower bound # > margin #; no integrity, budget or regression block": 58,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 25
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d1-n60-r3-continuous",
+        "kind": "null",
+        "n_units": 60,
+        "regression_units": 80,
+        "repetitions": 3,
+        "dev_candidates": 1,
+        "dev_units": 60,
+        "outcome": "continuous",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 0,
+      "rate": 0.0,
+      "lower_95": 0.0,
+      "upper_95": 0.00013525887526654137,
+      "status_counts": {
+        "rejected": 20000
+      },
+      "reason_counts": {
+        "improvement not supported: lower bound # <= margin #": 20000
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d1-n60-r5-binary",
+        "kind": "null",
+        "n_units": 60,
+        "regression_units": 80,
+        "repetitions": 5,
+        "dev_candidates": 1,
+        "dev_units": 60,
+        "outcome": "binary",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 32,
+      "rate": 0.0016,
+      "lower_95": 0.001197719023647728,
+      "upper_95": 0.002137107023217961,
+      "status_counts": {
+        "eligible": 32,
+        "insufficient_evidence": 5,
+        "rejected": 19963
+      },
+      "reason_counts": {
+        "improvement not supported: lower bound # <= margin #": 19963,
+        "improvement supported: lower bound # > margin #; no integrity, budget or regression block": 32,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 5
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d1-n60-r5-continuous",
+        "kind": "null",
+        "n_units": 60,
+        "regression_units": 80,
+        "repetitions": 5,
+        "dev_candidates": 1,
+        "dev_units": 60,
+        "outcome": "continuous",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 0,
+      "rate": 0.0,
+      "lower_95": 0.0,
+      "upper_95": 0.00013525887526654137,
+      "status_counts": {
+        "rejected": 20000
+      },
+      "reason_counts": {
+        "improvement not supported: lower bound # <= margin #": 20000
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d1-n60-r10-binary",
+        "kind": "null",
+        "n_units": 60,
+        "regression_units": 80,
+        "repetitions": 10,
+        "dev_candidates": 1,
+        "dev_units": 60,
+        "outcome": "binary",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 9,
+      "rate": 0.00045,
+      "lower_95": 0.00026182530973546377,
+      "upper_95": 0.0007733118325433376,
+      "status_counts": {
+        "eligible": 9,
+        "rejected": 19991
+      },
+      "reason_counts": {
+        "improvement not supported: lower bound # <= margin #": 19991,
+        "improvement supported: lower bound # > margin #; no integrity, budget or regression block": 9
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d1-n60-r10-continuous",
+        "kind": "null",
+        "n_units": 60,
+        "regression_units": 80,
+        "repetitions": 10,
+        "dev_candidates": 1,
+        "dev_units": 60,
+        "outcome": "continuous",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 0,
+      "rate": 0.0,
+      "lower_95": 0.0,
+      "upper_95": 0.00013525887526654137,
+      "status_counts": {
+        "rejected": 20000
+      },
+      "reason_counts": {
+        "improvement not supported: lower bound # <= margin #": 20000
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d5-n10-r1-binary",
+        "kind": "null",
+        "n_units": 10,
+        "regression_units": 10,
+        "repetitions": 1,
+        "dev_candidates": 5,
+        "dev_units": 10,
+        "outcome": "binary",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 0,
+      "rate": 0.0,
+      "lower_95": 0.0,
+      "upper_95": 0.00013525887526654137,
+      "status_counts": {
+        "insufficient_evidence": 20000
+      },
+      "reason_counts": {
+        "independent units # is below min_independent_units #": 20000,
+        "regression units # is below min_regression_units #": 20000,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 16910,
+        "degenerate interval: zero variance across units": 17
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d5-n10-r1-continuous",
+        "kind": "null",
+        "n_units": 10,
+        "regression_units": 10,
+        "repetitions": 1,
+        "dev_candidates": 5,
+        "dev_units": 10,
+        "outcome": "continuous",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 0,
+      "rate": 0.0,
+      "lower_95": 0.0,
+      "upper_95": 0.00013525887526654137,
+      "status_counts": {
+        "insufficient_evidence": 20000
+      },
+      "reason_counts": {
+        "independent units # is below min_independent_units #": 20000,
+        "regression units # is below min_regression_units #": 20000,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 10278
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d5-n10-r3-binary",
+        "kind": "null",
+        "n_units": 10,
+        "regression_units": 10,
+        "repetitions": 3,
+        "dev_candidates": 5,
+        "dev_units": 10,
+        "outcome": "binary",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 0,
+      "rate": 0.0,
+      "lower_95": 0.0,
+      "upper_95": 0.00013525887526654137,
+      "status_counts": {
+        "insufficient_evidence": 20000
+      },
+      "reason_counts": {
+        "independent units # is below min_independent_units #": 20000,
+        "regression units # is below min_regression_units #": 20000,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 15672
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d5-n10-r3-continuous",
+        "kind": "null",
+        "n_units": 10,
+        "regression_units": 10,
+        "repetitions": 3,
+        "dev_candidates": 5,
+        "dev_units": 10,
+        "outcome": "continuous",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 0,
+      "rate": 0.0,
+      "lower_95": 0.0,
+      "upper_95": 0.00013525887526654137,
+      "status_counts": {
+        "insufficient_evidence": 20000
+      },
+      "reason_counts": {
+        "independent units # is below min_independent_units #": 20000,
+        "regression units # is below min_regression_units #": 20000,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 3203
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d5-n10-r5-binary",
+        "kind": "null",
+        "n_units": 10,
+        "regression_units": 10,
+        "repetitions": 5,
+        "dev_candidates": 5,
+        "dev_units": 10,
+        "outcome": "binary",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 0,
+      "rate": 0.0,
+      "lower_95": 0.0,
+      "upper_95": 0.00013525887526654137,
+      "status_counts": {
+        "insufficient_evidence": 20000
+      },
+      "reason_counts": {
+        "independent units # is below min_independent_units #": 20000,
+        "regression units # is below min_regression_units #": 20000,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 14246
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d5-n10-r5-continuous",
+        "kind": "null",
+        "n_units": 10,
+        "regression_units": 10,
+        "repetitions": 5,
+        "dev_candidates": 5,
+        "dev_units": 10,
+        "outcome": "continuous",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 0,
+      "rate": 0.0,
+      "lower_95": 0.0,
+      "upper_95": 0.00013525887526654137,
+      "status_counts": {
+        "insufficient_evidence": 20000
+      },
+      "reason_counts": {
+        "independent units # is below min_independent_units #": 20000,
+        "regression units # is below min_regression_units #": 20000,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 915
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d5-n10-r10-binary",
+        "kind": "null",
+        "n_units": 10,
+        "regression_units": 10,
+        "repetitions": 10,
+        "dev_candidates": 5,
+        "dev_units": 10,
+        "outcome": "binary",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 0,
+      "rate": 0.0,
+      "lower_95": 0.0,
+      "upper_95": 0.00013525887526654137,
+      "status_counts": {
+        "insufficient_evidence": 20000
+      },
+      "reason_counts": {
+        "independent units # is below min_independent_units #": 20000,
+        "regression units # is below min_regression_units #": 20000,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 11230
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d5-n10-r10-continuous",
+        "kind": "null",
+        "n_units": 10,
+        "regression_units": 10,
+        "repetitions": 10,
+        "dev_candidates": 5,
+        "dev_units": 10,
+        "outcome": "continuous",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 0,
+      "rate": 0.0,
+      "lower_95": 0.0,
+      "upper_95": 0.00013525887526654137,
+      "status_counts": {
+        "insufficient_evidence": 20000
+      },
+      "reason_counts": {
+        "independent units # is below min_independent_units #": 20000,
+        "regression units # is below min_regression_units #": 20000,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 34
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d5-n60-r1-binary",
+        "kind": "null",
+        "n_units": 60,
+        "regression_units": 80,
+        "repetitions": 1,
+        "dev_candidates": 5,
+        "dev_units": 60,
+        "outcome": "binary",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 88,
+      "rate": 0.0044,
+      "lower_95": 0.00369436746447181,
+      "upper_95": 0.005239701132692386,
+      "status_counts": {
+        "eligible": 88,
+        "insufficient_evidence": 161,
+        "rejected": 19751
+      },
+      "reason_counts": {
+        "improvement not supported: lower bound # <= margin #": 19750,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 161,
+        "improvement supported: lower bound # > margin #; no integrity, budget or regression block": 88,
+        "regression group regression: demonstrated regression (estimate #, upper bound # < -margin #)": 45
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d5-n60-r1-continuous",
+        "kind": "null",
+        "n_units": 60,
+        "regression_units": 80,
+        "repetitions": 1,
+        "dev_candidates": 5,
+        "dev_units": 60,
+        "outcome": "continuous",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 6,
+      "rate": 0.0003,
+      "lower_95": 0.00015514182357496674,
+      "upper_95": 0.0005800358963664147,
+      "status_counts": {
+        "eligible": 6,
+        "rejected": 19994
+      },
+      "reason_counts": {
+        "improvement not supported: lower bound # <= margin #": 19994,
+        "improvement supported: lower bound # > margin #; no integrity, budget or regression block": 6
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d5-n60-r3-binary",
+        "kind": "null",
+        "n_units": 60,
+        "regression_units": 80,
+        "repetitions": 3,
+        "dev_candidates": 5,
+        "dev_units": 60,
+        "outcome": "binary",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 64,
+      "rate": 0.0032,
+      "lower_95": 0.0026069248967817496,
+      "upper_95": 0.0039274683216830855,
+      "status_counts": {
+        "eligible": 64,
+        "insufficient_evidence": 16,
+        "rejected": 19920
+      },
+      "reason_counts": {
+        "improvement not supported: lower bound # <= margin #": 19920,
+        "improvement supported: lower bound # > margin #; no integrity, budget or regression block": 64,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 16
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d5-n60-r3-continuous",
+        "kind": "null",
+        "n_units": 60,
+        "regression_units": 80,
+        "repetitions": 3,
+        "dev_candidates": 5,
+        "dev_units": 60,
+        "outcome": "continuous",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 0,
+      "rate": 0.0,
+      "lower_95": 0.0,
+      "upper_95": 0.00013525887526654137,
+      "status_counts": {
+        "rejected": 20000
+      },
+      "reason_counts": {
+        "improvement not supported: lower bound # <= margin #": 20000
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d5-n60-r5-binary",
+        "kind": "null",
+        "n_units": 60,
+        "regression_units": 80,
+        "repetitions": 5,
+        "dev_candidates": 5,
+        "dev_units": 60,
+        "outcome": "binary",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 32,
+      "rate": 0.0016,
+      "lower_95": 0.001197719023647728,
+      "upper_95": 0.002137107023217961,
+      "status_counts": {
+        "eligible": 32,
+        "insufficient_evidence": 6,
+        "rejected": 19962
+      },
+      "reason_counts": {
+        "improvement not supported: lower bound # <= margin #": 19962,
+        "improvement supported: lower bound # > margin #; no integrity, budget or regression block": 32,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 6
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d5-n60-r5-continuous",
+        "kind": "null",
+        "n_units": 60,
+        "regression_units": 80,
+        "repetitions": 5,
+        "dev_candidates": 5,
+        "dev_units": 60,
+        "outcome": "continuous",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 0,
+      "rate": 0.0,
+      "lower_95": 0.0,
+      "upper_95": 0.00013525887526654137,
+      "status_counts": {
+        "rejected": 20000
+      },
+      "reason_counts": {
+        "improvement not supported: lower bound # <= margin #": 20000
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d5-n60-r10-binary",
+        "kind": "null",
+        "n_units": 60,
+        "regression_units": 80,
+        "repetitions": 10,
+        "dev_candidates": 5,
+        "dev_units": 60,
+        "outcome": "binary",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 11,
+      "rate": 0.00055,
+      "lower_95": 0.00033663664121644536,
+      "upper_95": 0.0008984734492873028,
+      "status_counts": {
+        "eligible": 11,
+        "rejected": 19989
+      },
+      "reason_counts": {
+        "improvement not supported: lower bound # <= margin #": 19989,
+        "improvement supported: lower bound # > margin #; no integrity, budget or regression block": 11
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d5-n60-r10-continuous",
+        "kind": "null",
+        "n_units": 60,
+        "regression_units": 80,
+        "repetitions": 10,
+        "dev_candidates": 5,
+        "dev_units": 60,
+        "outcome": "continuous",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 0,
+      "rate": 0.0,
+      "lower_95": 0.0,
+      "upper_95": 0.00013525887526654137,
+      "status_counts": {
+        "rejected": 20000
+      },
+      "reason_counts": {
+        "improvement not supported: lower bound # <= margin #": 20000
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d20-n10-r1-binary",
+        "kind": "null",
+        "n_units": 10,
+        "regression_units": 10,
+        "repetitions": 1,
+        "dev_candidates": 20,
+        "dev_units": 10,
+        "outcome": "binary",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 0,
+      "rate": 0.0,
+      "lower_95": 0.0,
+      "upper_95": 0.00013525887526654137,
+      "status_counts": {
+        "insufficient_evidence": 20000
+      },
+      "reason_counts": {
+        "independent units # is below min_independent_units #": 20000,
+        "regression units # is below min_regression_units #": 20000,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 16968,
+        "degenerate interval: zero variance across units": 29
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d20-n10-r1-continuous",
+        "kind": "null",
+        "n_units": 10,
+        "regression_units": 10,
+        "repetitions": 1,
+        "dev_candidates": 20,
+        "dev_units": 10,
+        "outcome": "continuous",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 0,
+      "rate": 0.0,
+      "lower_95": 0.0,
+      "upper_95": 0.00013525887526654137,
+      "status_counts": {
+        "insufficient_evidence": 20000
+      },
+      "reason_counts": {
+        "independent units # is below min_independent_units #": 20000,
+        "regression units # is below min_regression_units #": 20000,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 10249
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d20-n10-r3-binary",
+        "kind": "null",
+        "n_units": 10,
+        "regression_units": 10,
+        "repetitions": 3,
+        "dev_candidates": 20,
+        "dev_units": 10,
+        "outcome": "binary",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 0,
+      "rate": 0.0,
+      "lower_95": 0.0,
+      "upper_95": 0.00013525887526654137,
+      "status_counts": {
+        "insufficient_evidence": 20000
+      },
+      "reason_counts": {
+        "independent units # is below min_independent_units #": 20000,
+        "regression units # is below min_regression_units #": 20000,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 15610
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d20-n10-r3-continuous",
+        "kind": "null",
+        "n_units": 10,
+        "regression_units": 10,
+        "repetitions": 3,
+        "dev_candidates": 20,
+        "dev_units": 10,
+        "outcome": "continuous",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 0,
+      "rate": 0.0,
+      "lower_95": 0.0,
+      "upper_95": 0.00013525887526654137,
+      "status_counts": {
+        "insufficient_evidence": 20000
+      },
+      "reason_counts": {
+        "independent units # is below min_independent_units #": 20000,
+        "regression units # is below min_regression_units #": 20000,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 3208
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d20-n10-r5-binary",
+        "kind": "null",
+        "n_units": 10,
+        "regression_units": 10,
+        "repetitions": 5,
+        "dev_candidates": 20,
+        "dev_units": 10,
+        "outcome": "binary",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 0,
+      "rate": 0.0,
+      "lower_95": 0.0,
+      "upper_95": 0.00013525887526654137,
+      "status_counts": {
+        "insufficient_evidence": 20000
+      },
+      "reason_counts": {
+        "independent units # is below min_independent_units #": 20000,
+        "regression units # is below min_regression_units #": 20000,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 14261
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d20-n10-r5-continuous",
+        "kind": "null",
+        "n_units": 10,
+        "regression_units": 10,
+        "repetitions": 5,
+        "dev_candidates": 20,
+        "dev_units": 10,
+        "outcome": "continuous",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 0,
+      "rate": 0.0,
+      "lower_95": 0.0,
+      "upper_95": 0.00013525887526654137,
+      "status_counts": {
+        "insufficient_evidence": 20000
+      },
+      "reason_counts": {
+        "independent units # is below min_independent_units #": 20000,
+        "regression units # is below min_regression_units #": 20000,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 962
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d20-n10-r10-binary",
+        "kind": "null",
+        "n_units": 10,
+        "regression_units": 10,
+        "repetitions": 10,
+        "dev_candidates": 20,
+        "dev_units": 10,
+        "outcome": "binary",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 0,
+      "rate": 0.0,
+      "lower_95": 0.0,
+      "upper_95": 0.00013525887526654137,
+      "status_counts": {
+        "insufficient_evidence": 20000
+      },
+      "reason_counts": {
+        "independent units # is below min_independent_units #": 20000,
+        "regression units # is below min_regression_units #": 20000,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 11198
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d20-n10-r10-continuous",
+        "kind": "null",
+        "n_units": 10,
+        "regression_units": 10,
+        "repetitions": 10,
+        "dev_candidates": 20,
+        "dev_units": 10,
+        "outcome": "continuous",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 0,
+      "rate": 0.0,
+      "lower_95": 0.0,
+      "upper_95": 0.00013525887526654137,
+      "status_counts": {
+        "insufficient_evidence": 20000
+      },
+      "reason_counts": {
+        "independent units # is below min_independent_units #": 20000,
+        "regression units # is below min_regression_units #": 20000,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 28
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d20-n60-r1-binary",
+        "kind": "null",
+        "n_units": 60,
+        "regression_units": 80,
+        "repetitions": 1,
+        "dev_candidates": 20,
+        "dev_units": 60,
+        "outcome": "binary",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 75,
+      "rate": 0.00375,
+      "lower_95": 0.0031031025418342254,
+      "upper_95": 0.0045311418918678155,
+      "status_counts": {
+        "eligible": 75,
+        "insufficient_evidence": 162,
+        "rejected": 19763
+      },
+      "reason_counts": {
+        "improvement not supported: lower bound # <= margin #": 19763,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 162,
+        "improvement supported: lower bound # > margin #; no integrity, budget or regression block": 75,
+        "regression group regression: demonstrated regression (estimate #, upper bound # < -margin #)": 29
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d20-n60-r1-continuous",
+        "kind": "null",
+        "n_units": 60,
+        "regression_units": 80,
+        "repetitions": 1,
+        "dev_candidates": 20,
+        "dev_units": 60,
+        "outcome": "continuous",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 5,
+      "rate": 0.00025,
+      "lower_95": 0.00012169913653931706,
+      "upper_95": 0.0005134921092895911,
+      "status_counts": {
+        "eligible": 5,
+        "rejected": 19995
+      },
+      "reason_counts": {
+        "improvement not supported: lower bound # <= margin #": 19995,
+        "improvement supported: lower bound # > margin #; no integrity, budget or regression block": 5
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d20-n60-r3-binary",
+        "kind": "null",
+        "n_units": 60,
+        "regression_units": 80,
+        "repetitions": 3,
+        "dev_candidates": 20,
+        "dev_units": 60,
+        "outcome": "binary",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 67,
+      "rate": 0.00335,
+      "lower_95": 0.0027418157149184936,
+      "upper_95": 0.004092536925883761,
+      "status_counts": {
+        "eligible": 67,
+        "insufficient_evidence": 27,
+        "rejected": 19906
+      },
+      "reason_counts": {
+        "improvement not supported: lower bound # <= margin #": 19906,
+        "improvement supported: lower bound # > margin #; no integrity, budget or regression block": 67,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 27,
+        "regression group regression: demonstrated regression (estimate #, upper bound # < -margin #)": 1
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d20-n60-r3-continuous",
+        "kind": "null",
+        "n_units": 60,
+        "regression_units": 80,
+        "repetitions": 3,
+        "dev_candidates": 20,
+        "dev_units": 60,
+        "outcome": "continuous",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 0,
+      "rate": 0.0,
+      "lower_95": 0.0,
+      "upper_95": 0.00013525887526654137,
+      "status_counts": {
+        "rejected": 20000
+      },
+      "reason_counts": {
+        "improvement not supported: lower bound # <= margin #": 20000
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d20-n60-r5-binary",
+        "kind": "null",
+        "n_units": 60,
+        "regression_units": 80,
+        "repetitions": 5,
+        "dev_candidates": 20,
+        "dev_units": 60,
+        "outcome": "binary",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 37,
+      "rate": 0.00185,
+      "lower_95": 0.0014130916384632528,
+      "upper_95": 0.0024216667789648027,
+      "status_counts": {
+        "eligible": 37,
+        "insufficient_evidence": 4,
+        "rejected": 19959
+      },
+      "reason_counts": {
+        "improvement not supported: lower bound # <= margin #": 19959,
+        "improvement supported: lower bound # > margin #; no integrity, budget or regression block": 37,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 4
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d20-n60-r5-continuous",
+        "kind": "null",
+        "n_units": 60,
+        "regression_units": 80,
+        "repetitions": 5,
+        "dev_candidates": 20,
+        "dev_units": 60,
+        "outcome": "continuous",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 0,
+      "rate": 0.0,
+      "lower_95": 0.0,
+      "upper_95": 0.00013525887526654137,
+      "status_counts": {
+        "rejected": 20000
+      },
+      "reason_counts": {
+        "improvement not supported: lower bound # <= margin #": 20000
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d20-n60-r10-binary",
+        "kind": "null",
+        "n_units": 60,
+        "regression_units": 80,
+        "repetitions": 10,
+        "dev_candidates": 20,
+        "dev_units": 60,
+        "outcome": "binary",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 8,
+      "rate": 0.0004,
+      "lower_95": 0.00022540115200954763,
+      "upper_95": 0.0007097495161567806,
+      "status_counts": {
+        "eligible": 8,
+        "rejected": 19992
+      },
+      "reason_counts": {
+        "improvement not supported: lower bound # <= margin #": 19992,
+        "improvement supported: lower bound # > margin #; no integrity, budget or regression block": 8
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "null-d20-n60-r10-continuous",
+        "kind": "null",
+        "n_units": 60,
+        "regression_units": 80,
+        "repetitions": 10,
+        "dev_candidates": 20,
+        "dev_units": 60,
+        "outcome": "continuous",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 20000,
+      "promoted": 0,
+      "rate": 0.0,
+      "lower_95": 0.0,
+      "upper_95": 0.00013525887526654137,
+      "status_counts": {
+        "rejected": 20000
+      },
+      "reason_counts": {
+        "improvement not supported: lower bound # <= margin #": 20000
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 104
+    }
+  ],
+  "passes_null_bound": true,
+  "python": "3.14.2 x86_64",
+  "wall_seconds": 1430.3751653750078,
+  "runner": {
+    "kind": "modal",
+    "chunk_simulations": 250,
+    "chunks": 4320,
+    "remote_python": [
+      "3.14.2 x86_64"
+    ],
+    "equivalence": "per-index RNG random.Random(f'{seed}:{scenario.id}:{index}'); chunk counters summed"
+  }
+}

@@ -121,9 +121,9 @@ class StatisticsPolicy:
     profile: str = "binary_v1"
     alpha: float = 0.05
     practical_margin: float = 0.05
-    regression_margin: float = 0.05
-    min_independent_units: int = 30
-    min_regression_units: int = 30
+    regression_margin: float = 0.10
+    min_independent_units: int = 50
+    min_regression_units: int = 80
     bootstrap_iterations: int = 10000
     timeout_is_task_failure: bool = False
     max_attempts: int = 1

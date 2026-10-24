@@ -142,7 +142,7 @@ class A03MinimumUnits(TempDirCase):
         decision = result["decision"]
         self.assertEqual(decision["status"], DecisionStatus.INSUFFICIENT_EVIDENCE.value)
         self.assertEqual(decision["n_units"], 1)
-        self.assertTrue(any("min_independent_units 30" in reason for reason in decision["reasons"]),
+        self.assertTrue(any("min_independent_units 50" in reason for reason in decision["reasons"]),
                         decision["reasons"])
 
 

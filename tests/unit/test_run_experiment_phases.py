@@ -123,8 +123,8 @@ class FinalistTests(PhaseCase):
         stored = self.db().trials(payload["experiment_id"])
         self.assertEqual(len(stored), len(payload["runs"]))
         self.assertEqual(payload["decision"]["status"], DecisionStatus.INSUFFICIENT_EVIDENCE.value)
-        # Decided by the statistics (3 validation families, far below the 30-unit floor), not a placeholder.
-        self.assertIn("independent units 3 is below min_independent_units 30", payload["decision"]["reasons"])
+        # Decided by the statistics (3 validation families, far below the 50-unit floor), not a placeholder.
+        self.assertIn("independent units 3 is below min_independent_units 50", payload["decision"]["reasons"])
         self.assertEqual(payload["decision"]["n_units"], 3)
         self.assertEqual(payload["decision"]["diagnostics"]["n_regression_units"], 1)
         self.assertEqual(payload["decision"]["candidate_id"], "a")
@@ -276,17 +276,17 @@ class EvidenceTests(PhaseCase):
 
 class EligibleEndToEndTests(PhaseCase):
     def test_a_run_with_enough_independent_units_is_eligible_and_recorded(self) -> None:
-        tasks = [holdout_task(f"v{i}", "validation") for i in range(30)]
-        tasks += [holdout_task(f"r{i}", "regression") for i in range(30)]
+        tasks = [holdout_task(f"v{i}", "validation") for i in range(51)]
+        tasks += [holdout_task(f"r{i}", "regression") for i in range(80)]
         spec = self.spec("m", ("a",), tasks=tasks)
         executor = scripted(a=lambda t: t.startswith("r") or int(t[1:]) % 3 != 0)
         executor.answers["base"] = lambda t: t.startswith("r")
         payload = self.run_exp(spec, executor)
         decision = payload["decision"]
         self.assertEqual(decision["status"], DecisionStatus.ELIGIBLE.value, decision["reasons"])
-        self.assertEqual(decision["n_units"], 30)
+        self.assertEqual(decision["n_units"], 51)
         self.assertEqual(decision["candidate_id"], "a")
-        self.assertEqual(len(decision["evidence_ids"]), 2 * 60 * REPETITIONS)
+        self.assertEqual(len(decision["evidence_ids"]), 2 * 131 * REPETITIONS)
         self.assertEqual(payload["summary"]["recommended"], ["a"])
         stored = self.db().decision(payload["decision_id"])
         self.assertEqual(stored.status, DecisionStatus.ELIGIBLE)

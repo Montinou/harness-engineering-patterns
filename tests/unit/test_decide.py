@@ -1,8 +1,9 @@
 """The decision function: fail-closed budgets, integrity blocks and non-inferiority, in a fixed order.
 
-Records are synthetic (``tests.support.make_records``): nothing runs. The confirmatory fixture has 30
-validation tasks, 30 regression tasks and 2 development tasks, each its own family, so it meets the
-``binary_v1`` profile floors (30 independent units each) and every status is reachable from data.
+Records are synthetic (``tests.support.make_records``): nothing runs. The confirmatory fixture has 51
+validation tasks, 80 regression tasks and 2 development tasks, each its own family, so it meets the
+``binary_v1`` profile floors (50 validation and 80 regression independent units) and every status is
+reachable from data.
 """
 from __future__ import annotations
 
@@ -22,7 +23,8 @@ from harness_workbench.experiments.status import DecisionStatus, EvaluationStatu
 from tests.support import exact_task, make_records, write_manifest
 
 CONTROLS = {"positive": {"outputs": {"answer": "CORRECT"}}, "negatives": [{"outputs": {"answer": "INCORRECT"}}]}
-N_UNITS = 30
+N_UNITS = 51          # validation units: 34 of 51 candidate wins give the 2/3 estimate
+N_REGRESSION = 80
 DIAGNOSTIC_KEYS = (
     "n_units", "n_regression_units", "repetitions", "method", "estimate", "lower_bound", "zero_variance",
     "token_ratio", "latency_ratio", "latency_gate", "task_deltas", "noninferiority", "group_alpha",
@@ -56,7 +58,7 @@ def setUpModule() -> None:
     tasks = [exact_task(f"d{i}", f"development scenario {i}", split="development", runs_candidate_code=False)
              for i in range(2)]
     tasks += [_holdout(f"v{i}", "validation") for i in range(N_UNITS)]
-    tasks += [_holdout(f"r{i}", "regression") for i in range(N_UNITS)]
+    tasks += [_holdout(f"r{i}", "regression") for i in range(N_REGRESSION)]
     SPEC = _confirmatory(root / "full", tasks)
     SMALL = _confirmatory(root / "small", [_holdout("v0", "validation"), _holdout("r0", "regression")])
     EXPLORATORY = ExperimentSpec.load(write_manifest(
@@ -74,7 +76,7 @@ def index(task_id: str) -> int:
 
 
 def good_score(variant: str, task_id: str, _rep: int) -> float:
-    """Baseline always 0; the candidate wins on 20 of the 30 validation tasks and ties on regression."""
+    """Baseline always 0; the candidate wins on 34 of the 51 validation tasks and ties on regression."""
     if variant == "baseline" or not task_id.startswith("v"):
         return 0.0
     return 1.0 if index(task_id) % 3 else 0.0
@@ -114,13 +116,13 @@ class BudgetTests(DecideCase):
         records = make_records(SPEC, score=good_score, tokens=lambda v, t, r: (
             Measurement.unknown() if v == "baseline" else Measurement.reported(100, Provenance.ADAPTER_REPORTED)))
         decision = run_decide(SPEC, records)
-        self.assertStatus(decision, DecisionStatus.INSUFFICIENT_EVIDENCE, "token usage unknown for 300 trials")
-        self.assertEqual(decision.diagnostics["unknown_usage_trials"], 300)
+        self.assertStatus(decision, DecisionStatus.INSUFFICIENT_EVIDENCE, "token usage unknown for 655 trials")
+        self.assertEqual(decision.diagnostics["unknown_usage_trials"], 655)
 
     def test_provenance_outside_the_accepted_set_is_unknown(self) -> None:
         records = make_records(SPEC, score=good_score, tokens=Measurement.reported(100, Provenance.ESTIMATED))
         self.assertStatus(run_decide(SPEC, records), DecisionStatus.INSUFFICIENT_EVIDENCE,
-                          "token usage unknown for 600 trials")
+                          "token usage unknown for 1310 trials")
         accepting = with_budget(SPEC, accepted_provenance=("estimated",))
         self.assertStatus(run_decide(accepting, records), DecisionStatus.ELIGIBLE)
 
@@ -146,7 +148,7 @@ class BudgetTests(DecideCase):
         unknown = make_records(SPEC, score=good_score, tokens=Measurement.unknown())
         ungated = with_budget(SPEC, max_token_ratio=None, max_latency_ratio=None)
         self.assertStatus(run_decide(ungated, unknown), DecisionStatus.ELIGIBLE)
-        self.assertEqual(run_decide(ungated, unknown).diagnostics["unknown_usage_trials"], 600)
+        self.assertEqual(run_decide(ungated, unknown).diagnostics["unknown_usage_trials"], 1310)
 
     def test_latency_not_applicable_on_both_sides_skips_gate_but_unknown_blocks(self) -> None:
         not_applicable = make_records(SPEC, score=good_score, latency=Measurement.not_applicable())
@@ -234,8 +236,8 @@ class EvidenceTests(DecideCase):
     def test_one_task_many_repetitions_is_insufficient(self) -> None:   # A3
         decision = run_decide(SMALL, make_records(SMALL, score=good_score))
         self.assertStatus(decision, DecisionStatus.INSUFFICIENT_EVIDENCE,
-                          "independent units 1 is below min_independent_units 30",
-                          "regression units 1 is below min_regression_units 30")
+                          "independent units 1 is below min_independent_units 50",
+                          "regression units 1 is below min_regression_units 80")
         self.assertEqual(decision.n_units, 1)
         self.assertEqual(decision.diagnostics["n_units"], 1)
         self.assertEqual(decision.diagnostics["repetitions"], 5)
@@ -295,7 +297,7 @@ class RegressionGroupTests(DecideCase):
         worse = self.regression_score(lambda i: -0.4 if i % 2 else -0.6)
         decision = run_decide(SPEC, make_records(SPEC, score=worse))
         self.assertStatus(decision, DecisionStatus.REJECTED, "regression group regression: demonstrated regression")
-        wide = self.regression_score(lambda i: 0.5 if i % 2 else -0.5)
+        wide = self.regression_score(lambda i: 1.0 if i % 2 else -1.0)
         decision = run_decide(SPEC, make_records(SPEC, score=wide))
         self.assertStatus(decision, DecisionStatus.INSUFFICIENT_EVIDENCE,
                           "regression group regression: non-inferiority undecided")
@@ -303,15 +305,15 @@ class RegressionGroupTests(DecideCase):
         self.assertEqual(run_decide(SPEC, make_records(SPEC, score=fine)).status, DecisionStatus.ELIGIBLE)
 
     def test_bonferroni_across_groups(self) -> None:   # 2 groups -> group_alpha == 0.025
-        families = [f"r{i}" for i in range(N_UNITS)]
+        families = [f"r{i}" for i in range(N_REGRESSION)]
         plan = dataclasses.replace(build_plan(SPEC), regression_groups={
-            "first": tuple(families[:15]), "second": tuple(families[15:])})
+            "first": tuple(families[:40]), "second": tuple(families[40:])})
         decision = run_decide(SPEC, make_records(SPEC, score=good_score), plan=plan)
         self.assertStatus(decision, DecisionStatus.ELIGIBLE)
         self.assertEqual(decision.diagnostics["group_alpha"], 0.025)
         self.assertEqual(sorted(decision.diagnostics["noninferiority"]), ["first", "second"])
         for group in decision.diagnostics["noninferiority"].values():
-            self.assertEqual(group["units"], 15)
+            self.assertEqual(group["units"], 40)
             self.assertEqual(group["outcome"], "non_inferior")
             self.assertIn("lower_bound", group)
             self.assertIn("upper_bound", group)
@@ -325,9 +327,9 @@ class RegressionGroupTests(DecideCase):
 
     def test_a_regression_family_outside_every_group_is_insufficient(self) -> None:
         plan = dataclasses.replace(build_plan(SPEC), regression_groups={
-            "partial": tuple(f"r{i}" for i in range(N_UNITS - 1))})
+            "partial": tuple(f"r{i}" for i in range(N_REGRESSION - 1))})
         decision = run_decide(SPEC, make_records(SPEC, score=good_score), plan=plan)
-        self.assertStatus(decision, DecisionStatus.INSUFFICIENT_EVIDENCE, "not covered by any regression group: r29")
+        self.assertStatus(decision, DecisionStatus.INSUFFICIENT_EVIDENCE, "not covered by any regression group: r79")
 
 
 class ModeTests(DecideCase):
@@ -379,10 +381,10 @@ class EligibleTests(DecideCase):
         # evidence: the last-attempt holdout trials of the baseline and the candidate, all real records
         holdout = {r.trial_id for r in records}
         self.assertEqual(set(decision.evidence_ids), holdout)
-        self.assertEqual(len(decision.evidence_ids), 2 * 2 * N_UNITS * 5)
+        self.assertEqual(len(decision.evidence_ids), 2 * (N_UNITS + N_REGRESSION) * 5)
         for key in DIAGNOSTIC_KEYS:
             self.assertIn(key, decision.diagnostics)
-        self.assertEqual(decision.diagnostics["n_regression_units"], N_UNITS)
+        self.assertEqual(decision.diagnostics["n_regression_units"], N_REGRESSION)
         self.assertEqual(decision.diagnostics["method"], SPEC.statistics.method)
         self.assertEqual(decision.diagnostics["unknown_usage_trials"], 0)
         self.assertEqual(decision.diagnostics["token_ratio"], 1.0)

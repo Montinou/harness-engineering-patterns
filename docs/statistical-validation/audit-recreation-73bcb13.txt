@@ -1,0 +1,6 @@
+# Recreation of the auditor's script u2_mc.py on the audited commit 73bcb1306509dde7fff2f15bc43504b100f83984.
+# This is the auditor's script run unchanged (worktree detached at 73bcb13), not a claim of this work. Run on 2026-10-24T03:51:08Z, python Python 3.14.7.
+# usage: AUDIT_WORKTREE=<worktree at 73bcb13> python3 audits/2026-10-22_run-02_experimental-evaluation-layer_73bcb130/repro/u2_mc.py <tasks> <variants> <p_base> <p_var> <N>
+tasks=3 variants=5 p_base=0.5 p_var=0.5: recommended in 34/400 = 8.5% (52s)
+tasks=1 variants=1 p_base=0.5 p_var=0.5: recommended in 12/400 = 3.0% (6s)
+tasks=5 variants=1 p_base=0.5 p_var=0.7: recommended in 47/300 = 15.7% (21s)
