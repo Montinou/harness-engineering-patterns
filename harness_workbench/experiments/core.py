@@ -569,10 +569,15 @@ def run_experiment(spec: ExperimentSpec, executor: Any, root: str | Path, *,
     backend = backend or require_backend(spec.environment)
     limits = ProcessLimits.from_config(spec.environment.limits)  # run_trial applies the executor's own cap
     destination = Path(root).resolve()
-    destination.mkdir(parents=True, exist_ok=True)
     owned = db is None
     if owned:
         from harness_workbench.core.db import WorkbenchDB  # imported here: core.db imports this package
+        from harness_workbench.core.store import preflight_library
+        # An unmigrated library is refused before the database exists: creating it would hide the legacy
+        # versions from report and let the holdout be used up on a library that cannot promote.
+        preflight_library(destination)
+    destination.mkdir(parents=True, exist_ok=True)
+    if owned:
         db = WorkbenchDB.open(destination)
     try:
         return _run(spec, executor, destination, backend, limits, db, decide or default_decide)

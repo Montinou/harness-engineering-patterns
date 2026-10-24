@@ -135,6 +135,29 @@ def _refuse_unmigrated(root: Path, db: WorkbenchDB | None = None) -> None:
         raise MigrationRequired(f"run harness-workbench migrate-library --root {root}")
 
 
+def preflight_library(root: Path, base: Harness | None = None) -> None:
+    """Raise what ``persist_result`` would raise about the library, before anything is run or written.
+
+    ``MigrationRequired`` for JSON versions the database has never seen; with ``base``, ``LineageConflict`` when
+    its id and version are already registered with different content. Creates no database and no directory.
+    """
+    from harness_workbench.core.db import LineageConflict, WorkbenchDB
+
+    root = Path(root)
+    _refuse_unmigrated(root)
+    if not WorkbenchDB.exists(root):
+        return
+    db = WorkbenchDB.open(root)
+    try:
+        _refuse_unmigrated(root, db)
+        # The same comparison register_base makes: the stored hash column against the base's hash.
+        if (base is not None and (base.id, base.version) in db.version_keys()
+                and base.version not in db.find_by_hash(base.id, base.execution_config_hash())):
+            raise LineageConflict(f"{base.id} v{base.version} is already registered with different content")
+    finally:
+        db.close()
+
+
 def _export_library_files(db: WorkbenchDB, root: Path) -> list[Path]:
     """Harness files for versions that lack one, then ``index.json``, under one write lock.
 

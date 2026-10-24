@@ -34,9 +34,13 @@ python -m pip install -e .
 python -m unittest discover -s tests -v
 # exploratory smoke test: a synthetic agent, one task, never promotable
 harness-workbench experiment --provider command --spec examples/experiments/local-command.json --root .
-# confirmatory synthetic demo (136 tasks, one finalist): allow a few minutes
-harness-workbench experiment --provider command --spec examples/experiments/confirmatory-demo.json --root .
+# confirmatory synthetic demo (136 tasks, one finalist): allow a few minutes, and use a fresh --root
+harness-workbench experiment --provider command --spec examples/experiments/confirmatory-demo.json --root "$(mktemp -d)/demo"
 ~~~
+
+The holdout tasks are used up once per library (the `--root`). Running the confirmatory demo, or the
+`improve --validation-spec` gate on the same manifest, a second time on the same root ends `exploratory_only` with
+"already consumed", so give every confirmatory demo command its own fresh `--root`.
 
 Open `experiments/<id>/report.html`. The first command ends `exploratory_only`: its manifest is
 `mode: exploratory`, so it is not promotion evidence. The second ends `eligible` for the finalist `verification`
@@ -370,12 +374,15 @@ harness-workbench improve \
   --harness examples/workbench/base_research_harness.json \
   --task "Fact-check a claim" --domain research \
   --validation-spec examples/experiments/confirmatory-demo.json \
-  --root .
+  --root "$(mktemp -d)/gate"   # a fresh root: the holdout is used up once per library
 ~~~
 
 - An exploratory or legacy `--validation-spec` is refused before anything runs (exit 2); run `migrate-manifest` and
   add splits and controls.
 - The execution backend the spec asks for must exist before anything is paid for (exit 2 otherwise).
+- The library is checked before the gate runs: an unmigrated JSON library (`migrate-library` first) or a base whose
+  id and version are registered with different content is refused (exit 2) before the holdout is reserved.
+  `experiment` and `experiment --list-incomplete` refuse an unmigrated root the same way.
 - The gate runs **once**, on the final composed harness, against its baseline; Improve does not reuse the holdout
   inside its loop. In `sequential` mode only the final harness is confirmed.
 - Only a persisted `eligible` decision approves, and the promotion is tied to that decision id and to the

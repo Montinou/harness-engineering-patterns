@@ -9,3 +9,6 @@ runs/*
 !runs/.gitkeep
 .env
 .env.*
+/library/*
+!/library/.gitkeep
+/experiments/

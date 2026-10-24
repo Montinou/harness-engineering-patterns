@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import tempfile
 import unittest
 import uuid
@@ -15,6 +16,7 @@ from unittest import mock
 from harness_workbench import cli
 from harness_workbench.core.db import WorkbenchDB
 from harness_workbench.core.executor import MockExecutor
+from harness_workbench.core.harness import Harness, load_harness, save_harness
 from harness_workbench.core.proposer import RuleBasedProposer
 from tests.support import ScriptedExecutor, exact_task, write_manifest
 from tests.unit.test_contracts import make_plan
@@ -294,6 +296,94 @@ class GateTests(CliCase):
         self.assertEqual([variant.id for variant in controlled.variants], ["baseline", "candidate"])
         harness_dir = self.library / "library" / "harnesses" / payload["base"]["id"]
         self.assertTrue((harness_dir / f"{payload['adopted']['version']}.json").is_file())
+
+
+class LibraryPreflightTests(CliCase):
+    """A refusal the library would make anyway must come before the gate uses up the holdout (final review 1)."""
+
+    def legacy_library(self, prompt: str | None = None) -> Harness:
+        base = load_harness(BASE_HARNESS)
+        if prompt is not None:
+            base.system_prompt = prompt
+        save_harness(base, self.library / "library" / "harnesses" / base.id / f"{base.version}.json")
+        return base
+
+    def decision_rows(self) -> int:
+        if not WorkbenchDB.exists(self.library):
+            return 0
+        conn = sqlite3.connect(str(self.library / "library" / "workbench.sqlite3"))
+        try:
+            return sum(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                       for table in ("experiments", "decisions", "holdout_exposure"))
+        finally:
+            conn.close()
+
+    def improve_with_fake_gate(self, seen: list[Any]) -> tuple[int, str]:
+        gate = GateTests.fake_run_experiment(self, "eligible", seen, record=True)
+        spec = GateTests.confirmatory_spec(self)
+        with mock.patch("harness_workbench.experiments.run_experiment", side_effect=gate), \
+                self.patch_backend(MockExecutor()):
+            code, _out, err = run_cli(*self.improve_args(spec), "--json")
+        return code, err
+
+    def test_improve_on_legacy_root_is_refused_before_any_experiment_row(self) -> None:
+        self.legacy_library()
+        seen: list[Any] = []
+        code, err = self.improve_with_fake_gate(seen)
+        self.assertEqual(code, 2)
+        self.assertIn("migrate-library", err)
+        self.assertEqual(len(seen), 0, "the gate must not run before the library checks")
+        self.assertEqual(self.decision_rows(), 0)
+        self.assertFalse(WorkbenchDB.exists(self.library))
+
+    def test_improve_with_base_that_conflicts_with_the_registry_is_refused_before_the_gate(self) -> None:
+        base = self.legacy_library()
+        run_cli("migrate-library", "--root", str(self.library))
+        db = WorkbenchDB.open(self.library)
+        try:
+            with db.transaction() as conn:
+                conn.execute("UPDATE harness_versions SET execution_config_hash=? WHERE harness_id=? AND version=?",
+                             ("0" * 64, base.id, base.version))
+        finally:
+            db.close()
+        seen: list[Any] = []
+        code, err = self.improve_with_fake_gate(seen)
+        self.assertEqual(code, 2)
+        self.assertIn("already registered with different content", err)
+        self.assertEqual(len(seen), 0)
+        self.assertEqual(self.decision_rows(), 0)
+
+    def test_improve_on_a_migrated_root_still_reaches_the_gate(self) -> None:
+        self.legacy_library()
+        self.assertEqual(run_cli("migrate-library", "--root", str(self.library))[0], 0)
+        seen: list[Any] = []
+        code, err = self.improve_with_fake_gate(seen)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(len(seen), 1)
+
+    def test_experiment_commands_do_not_hide_a_legacy_library_from_report(self) -> None:
+        base = self.legacy_library()
+        before = run_cli("report", "--root", str(self.library), "--json")
+        self.assertEqual(json.loads(before[1]), {"harnesses": [base.id]})
+        code, _out, err = run_cli("experiment", "--root", str(self.library), "--list-incomplete")
+        self.assertEqual(code, 2)
+        self.assertIn("migrate-library", err)
+        self.assertFalse(WorkbenchDB.exists(self.library))
+        after = run_cli("report", "--root", str(self.library), "--json")
+        self.assertEqual(json.loads(after[1]), {"harnesses": [base.id]})
+        self.assertEqual(run_cli("report", "--root", str(self.library), "--harness-id", base.id)[0], 0)
+
+    def test_run_experiment_refuses_an_unmigrated_library_before_opening_the_database(self) -> None:
+        from harness_workbench.core.store import MigrationRequired
+        from harness_workbench.experiments import ExperimentSpec, run_experiment
+        from harness_workbench.experiments.backends import LocalBackend
+        self.legacy_library()
+        spec = ExperimentSpec.load(self.legacy_manifest())
+        executor = ScriptedExecutor({"base": lambda _t: False, "cand": lambda _t: True})
+        with self.assertRaises(MigrationRequired):
+            run_experiment(spec, executor, self.library, backend=LocalBackend())
+        self.assertFalse(WorkbenchDB.exists(self.library))
+        self.assertFalse((self.library / "experiments").exists())
 
 
 if __name__ == "__main__":

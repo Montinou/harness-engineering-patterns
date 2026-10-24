@@ -35,6 +35,7 @@ from harness_workbench.core.store import (
     known_harness_ids,
     lineage_chain,
     load_versions,
+    preflight_library,
 )
 
 
@@ -261,6 +262,9 @@ def _cmd_improve(args: argparse.Namespace) -> int:
         raise ValueError(
             "validation spec is exploratory (schema v1 or mode exploratory); run 'harness-workbench "
             "migrate-manifest' and assign splits and controls")
+    # What the library would refuse after the run (unmigrated JSON, a conflicting base) is refused before the
+    # gate reserves holdout tasks or any model call is paid for (exit 2).
+    preflight_library(args.root, harness)
     # An execution backend the spec asks for must exist before anything runs or is paid for (exit 2).
     validation_backend = require_backend(validation_spec.environment) if validation_spec is not None else None
     proposer, executor = _backend(args)
@@ -335,6 +339,7 @@ def _cmd_experiment(args: argparse.Namespace) -> int:
     if args.list_incomplete:
         from harness_workbench.core.db import WorkbenchDB
 
+        preflight_library(args.root.resolve())  # opening the database would hide a legacy library from report
         db = WorkbenchDB.open(args.root.resolve())
         try:
             incomplete = db.incomplete_experiments()

@@ -46,3 +46,7 @@ their results are synthetic and are not evidence about real agents.
 
 Manifests spell the interpreter `{python}` (the controller resolves it), never a bare `python`.
 
+The holdout tasks of a confirmatory manifest are used up once per library. Give each confirmatory demo command
+(`experiment` or `improve --validation-spec`) its own fresh `--root`, for example `--root "$(mktemp -d)/demo"`;
+a second command on the same root ends `exploratory_only` instead of `eligible`.
+

@@ -200,8 +200,9 @@ harness-workbench report --harness-id research-agent
 
 # Controlled experiment and offline report (exploratory smoke test; never promotable)
 harness-workbench experiment --provider command --spec examples/experiments/local-command.json --root .
-# Confirmatory synthetic demo (eligible; a few minutes)
-harness-workbench experiment --provider command --spec examples/experiments/confirmatory-demo.json --root .
+# Confirmatory synthetic demo (eligible; a few minutes). Each confirmatory command gets its own fresh --root:
+# the holdout tasks are used up once per library, so a second command on the same root ends exploratory_only.
+harness-workbench experiment --provider command --spec examples/experiments/confirmatory-demo.json --root "$(mktemp -d)/demo"
 harness-workbench experiment --root . --list-incomplete
 harness-workbench migrate-manifest --spec old-manifest.json --out new-manifest.json
 
@@ -210,7 +211,7 @@ harness-workbench export-library --root .
 harness-workbench migrate-library --root . --dry-run
 
 # Apply independent confirmatory criteria before accepting a composed candidate
-harness-workbench improve --provider mock --harness examples/workbench/base_research_harness.json --task "Fact-check a claim" --domain research --validation-spec examples/experiments/confirmatory-demo.json --root .
+harness-workbench improve --provider mock --harness examples/workbench/base_research_harness.json --task "Fact-check a claim" --domain research --validation-spec examples/experiments/confirmatory-demo.json --root "$(mktemp -d)/gate"
 ~~~
 
 No real model calls are made by the demonstration agent. The package runs on
