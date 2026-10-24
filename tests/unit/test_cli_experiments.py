@@ -124,6 +124,32 @@ class ExperimentOutputTests(CliCase):
         self.assertTrue(all(f"tokens={SCRIPTED_TOKENS}" in line for line in variant_lines), variant_lines)
         self.assertNotIn("ELIGIBLE", out)
 
+    def test_text_output_states_statistics_mode_and_exploratory_caveat(self) -> None:
+        code, out, err = self.run_experiment_cli()
+        self.assertEqual(code, 0, err)
+        lines = [line.strip() for line in out.splitlines()]
+        self.assertIn("mode exploratory", lines)
+        self.assertIn("Exploratory only: not promotion evidence", lines)
+        self.assertTrue(any(line.startswith("estimate ") and "lower_bound " in line and "n_units " in line
+                            for line in lines), out)
+        self.assertNotIn("Synthetic data", out)
+
+    def test_text_output_labels_synthetic_runs(self) -> None:
+        result = {
+            "experiment_id": "e", "mode": "exploratory", "report_path": "r", "results_path": "d",
+            "provenance": {"executor": "MockExecutor", "model_requested": "x"},
+            "decision": {"status": "invalid_experiment", "reasons": ["why"], "estimate": None,
+                         "lower_bound": None, "n_units": 0, "diagnostics": {}},
+            "summary": {"variants": {}},
+        }
+        out = StringIO()
+        with redirect_stdout(out):
+            cli._print_experiment(result, "name")
+        text = out.getvalue()
+        self.assertIn("Synthetic data", text)
+        self.assertIn("decision invalid_experiment", text)
+        self.assertIn("estimate unavailable  lower_bound unavailable  n_units 0", text)
+
     def test_unknown_tokens_print_as_unknown(self) -> None:
         payload_summary = {"variants": {"x": {"mean_score": None, "pass_rate": None, "mean_tokens": None}}}
         text = cli._variant_line("x", payload_summary["variants"]["x"])

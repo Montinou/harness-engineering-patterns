@@ -41,7 +41,7 @@ from harness_workbench.experiments.status import (
     USABLE_EVALUATION, USABLE_EXECUTION, DecisionStatus, EvaluationStatus, ExecutionStatus, Provenance,
 )
 from harness_workbench.experiments.validation import ValidationError, json_dumps_strict
-from harness_workbench.experiments.report import render_html
+from harness_workbench.experiments.report import RESULTS_SCHEMA_VERSION, render_html
 
 
 def _utc() -> str:
@@ -663,7 +663,8 @@ def _run(spec: ExperimentSpec, executor: Any, destination: Path, backend: Execut
         "created_at": _utc(),
         "name": spec.name,
         "mode": spec.mode,
-        "schema_version": spec.schema_version,
+        "schema_version": RESULTS_SCHEMA_VERSION,  # the layout of this file, not the manifest's version
+        "manifest_schema_version": spec.schema_version,
         "settings": _settings(spec),
         "provenance": _provenance(spec, executor, record),
         "variants": [{"id": v.id, "harness": str(v.source), "sha256": v.fingerprint,

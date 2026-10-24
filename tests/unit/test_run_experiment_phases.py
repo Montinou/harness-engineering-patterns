@@ -392,7 +392,10 @@ class LegacyTests(PhaseCase):
         self.assertEqual({run["variant_id"] for run in payload["runs"]}, {"baseline", "c1", "c2"})
         self.assertEqual(payload["decision"]["status"], DecisionStatus.EXPLORATORY_ONLY.value)
         self.assertEqual(payload["mode"], "exploratory")
-        self.assertEqual(payload["schema_version"], 1)
+        # Expectation change (T27): top-level schema_version is the results.json layout (2); the legacy
+        # manifest's own version moved to manifest_schema_version.
+        self.assertEqual(payload["schema_version"], 2)
+        self.assertEqual(payload["manifest_schema_version"], 1)
         self.assertIsNone(payload["selection"])
         self.assertEqual(payload["exposure"], {"fingerprints": [], "block_reason": None})
         self.assertEqual(payload["summary"]["recommended"], [])

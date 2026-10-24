@@ -368,15 +368,37 @@ def _cmd_experiment(args: argparse.Namespace) -> int:
             "results_path": result["results_path"],
         }, indent=2))
     else:
-        print(f"experiment {result['experiment_id']}  {spec.name}")
-        print(f"decision {result['decision']['status']}")
-        for reason in result["decision"]["reasons"]:
-            print(f"  {reason}")
-        for name, stats in result["summary"]["variants"].items():
-            print(_variant_line(name, stats))
-        print(f"report {result['report_path']}")
-        print(f"data   {result['results_path']}")
+        _print_experiment(result, spec.name)
     return 0
+
+
+def _statistic(value: object, spec: str = "+.4f") -> str:
+    return "unavailable" if value is None else format(value, spec)
+
+
+def _print_experiment(result: dict, name: str) -> None:
+    """Text output: the decision status first, with what it rests on and what the data is."""
+    from harness_workbench.experiments.report import EXPLORATORY_NOTICE, SYNTHETIC_LABEL, is_exploratory, is_synthetic
+
+    decision = result["decision"]
+    diagnostics = decision.get("diagnostics") or {}
+    print(f"experiment {result['experiment_id']}  {name}")
+    if is_synthetic(result):
+        print(SYNTHETIC_LABEL)
+    print(f"decision {decision['status']}")
+    for reason in decision["reasons"]:
+        print(f"  {reason}")
+    print(f"estimate {_statistic(decision.get('estimate'))}  lower_bound {_statistic(decision.get('lower_bound'))}  "
+          f"n_units {decision.get('n_units', 0)}  "
+          f"n_regression_units {diagnostics.get('n_regression_units', 'unavailable')}  "
+          f"method {diagnostics.get('method', 'unavailable')}")
+    print(f"mode {result['mode']}")
+    if is_exploratory(result):
+        print(EXPLORATORY_NOTICE)
+    for variant, stats in result["summary"]["variants"].items():
+        print(_variant_line(variant, stats))
+    print(f"report {result['report_path']}")
+    print(f"data   {result['results_path']}")
 
 
 def _rebase_paths(data: dict, source_dir: Path, target_dir: Path) -> None:
