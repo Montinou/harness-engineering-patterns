@@ -206,7 +206,8 @@ class ComposeAndStoreTests(unittest.TestCase):
                 "--root", folder,
             ]
             # The legacy manifest is exploratory: the gate refuses it before any execution. The former
-            # "version 2 is persisted" assertion moves to T28 against the confirmatory demo.
+            # "version 2 is persisted" assertion lives in tests/integration/test_confirmatory_demo.py,
+            # against the confirmatory demo (test_improve_with_confirmatory_demo_persists_version_2_via_promotion).
             with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
                 self.assertEqual(main(args), 2)
             self.assertFalse((Path(folder) / "experiments").exists())
