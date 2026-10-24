@@ -1,5 +1,7 @@
 {
+  "schema_version": 2,
   "name": "offline-command-smoke-test",
+  "mode": "exploratory",
   "baseline": "../workbench/base_research_harness.json",
   "variants": [
     {
@@ -26,21 +28,38 @@
           "path": "report.txt",
           "value": "PASS"
         }
-      ]
+      ],
+      "split": "development",
+      "family": "research-smoke",
+      "runs_candidate_code": false
     }
   ],
   "repetitions": 5,
   "seed": 42,
-  "min_samples": 3,
-  "bootstrap_iterations": 300,
+  "statistics": {
+    "bootstrap_iterations": 300
+  },
+  "environment": {
+    "mode": "trusted_local"
+  },
   "executor": {
     "type": "command",
     "argv": [
-      "python",
-      "-m",
-      "harness_workbench.experiments.demo_agent"
+      "{python}",
+      "-I",
+      "{demo_agent}"
     ],
     "model": "synthetic-fixture-agent",
-    "timeout_seconds": 30
+    "timeout_seconds": 30,
+    "supports": [
+      "system_prompt",
+      "guardrails",
+      "memory_config",
+      "tools",
+      "subagents",
+      "skills",
+      "scripts",
+      "plugins"
+    ]
   }
 }
