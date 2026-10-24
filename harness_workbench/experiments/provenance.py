@@ -18,6 +18,7 @@ from typing import Any
 from harness_workbench.core.harness import ALL_COMPONENTS
 from harness_workbench.experiments.contracts import TrialRecord
 from harness_workbench.experiments.manifest import ExperimentSpec
+from harness_workbench.experiments.status import ExecutionStatus
 
 SEED_SCOPE = "paired per repetition; honored only if the adapter honors it"
 DEPENDENCY_SCOPE = "stdlib only; adapter dependencies not hashed"
@@ -131,6 +132,25 @@ def detect_drift(records: list[TrialRecord], rubric_hashes: dict[str, str]) -> l
     if len(models) > 1:
         problems.append(f"model drift: the adapter reported {len(models)} different models ({', '.join(models)})")
     return problems
+
+
+def returned_model_status(records: list[TrialRecord]) -> dict[str, Any]:
+    """Whether the provider identified the model that answered, over the trials that completed.
+
+    ``verified``: every completed trial reported the same model. ``mixed``: more than one model was reported
+    (confirmatory runs are invalidated by ``detect_drift``). ``partial``: some completed trials reported a
+    model and some did not, so the claim is limited to the ones that did. ``unknown``: none reported one, so
+    reproducibility across trials cannot be claimed. A trial that did not complete reports no model by nature
+    and is not counted.
+    """
+    completed = [record.execution.returned_model for record in records
+                 if record.execution.status is ExecutionStatus.COMPLETED]
+    models = sorted({model for model in completed if model is not None})
+    if not models:
+        return {"status": "unknown", "models": []}
+    if len(models) > 1:
+        return {"status": "mixed", "models": models}
+    return {"status": "partial" if None in completed else "verified", "models": models}
 
 
 def unsupported_components(spec: ExperimentSpec, supports: frozenset[str]) -> list[str]:

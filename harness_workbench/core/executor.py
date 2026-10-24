@@ -97,6 +97,8 @@ class BehavioralReport:
     latency_ms: int = 0
     notes: str = ""
     outputs: dict[str, Any] = field(default_factory=dict)
+    # The model ID the provider says answered, when the executor can tell; None when it cannot.
+    returned_model: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)

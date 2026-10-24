@@ -92,7 +92,7 @@ def _provenance_block(payload: dict[str, Any]) -> str:
     provenance = payload.get("provenance")
     if not isinstance(provenance, dict):
         return ""
-    keys = ("executor", "model_requested", "commit", "dirty", "implementation_hash", "python", "platform")
+    keys = ("executor", "model_requested", "returned_model_status", "returned_models", "commit", "dirty", "implementation_hash", "python", "platform")
     pairs = [(key, str(provenance[key])) for key in keys if key in provenance]
     return "<h2>Provenance</h2>" + _rows(pairs) if pairs else ""
 

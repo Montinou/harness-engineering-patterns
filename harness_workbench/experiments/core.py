@@ -34,7 +34,8 @@ from harness_workbench.experiments.protocol import (
     FrozenSelection, build_plan, freeze_selection, holdout_fingerprints, select_finalist, verify_frozen,
 )
 from harness_workbench.experiments.provenance import (
-    adapter_supports, detect_drift, implementation_hash, provenance_record, unsupported_components,
+    adapter_supports, detect_drift, implementation_hash, provenance_record, returned_model_status,
+    unsupported_components,
 )
 from harness_workbench.experiments.stats import decide as default_decide
 from harness_workbench.experiments.status import (
@@ -110,11 +111,12 @@ def _legacy_execution(executor: Any, variant: Variant, task: TaskSpec, request: 
             tokens = Measurement.reported(report.cost_tokens, Provenance(declared))
         except ValidationError:
             tokens = Measurement.unknown()  # a negative or non-finite count is not evidence
+    returned = report.returned_model if isinstance(report.returned_model, str) and report.returned_model else None
     return ExecutionResult(
         trial_id=request.trial_id, status=ExecutionStatus.COMPLETED, outputs=dict(report.outputs),
         exit_code=None, stdout_tail="", stderr_tail="", tokens=tokens,
         latency_ms=Measurement.not_applicable(), adapter_latency_ms=Measurement.unknown(),
-        returned_model=None, artifact_hash=None, error=None, retryable=False,
+        returned_model=returned, artifact_hash=None, error=None, retryable=False,
     )
 
 
@@ -531,10 +533,14 @@ def _settings(spec: ExperimentSpec) -> dict[str, Any]:
     }
 
 
-def _provenance(spec: ExperimentSpec, executor: Any, record: dict[str, Any]) -> dict[str, Any]:
+def _provenance(spec: ExperimentSpec, executor: Any, record: dict[str, Any],
+                attempts: list[TrialRecord]) -> dict[str, Any]:
     """The persisted provenance: the full record plus the manifest and adapter facts older readers use."""
+    returned = returned_model_status(attempts)
     return {
         **record,
+        "returned_model_status": returned["status"],
+        "returned_models": returned["models"],
         "manifest_sha256": spec.source_hash,
         "workspace_and_seed_supported": any(
             callable(getattr(executor, name, None)) for name in ("execute_trial", "execute_case")),
@@ -666,7 +672,7 @@ def _run(spec: ExperimentSpec, executor: Any, destination: Path, backend: Execut
         "schema_version": RESULTS_SCHEMA_VERSION,  # the layout of this file, not the manifest's version
         "manifest_schema_version": spec.schema_version,
         "settings": _settings(spec),
-        "provenance": _provenance(spec, executor, record),
+        "provenance": _provenance(spec, executor, record, runner.attempts),
         "variants": [{"id": v.id, "harness": str(v.source), "sha256": v.fingerprint,
                       "version": v.harness.version} for v in spec.variants],
         "tasks": [{"id": task.id, "split": task.split.value if task.split else None, "family": task.family,

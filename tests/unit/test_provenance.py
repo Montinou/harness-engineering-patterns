@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 import harness_workbench
-from harness_workbench.core.anthropic_backend import AnthropicHarnessExecutor
+from harness_workbench.core.anthropic_backend import JUDGE_SYSTEM, AnthropicHarnessExecutor, Completion
 from harness_workbench.core.harness import ALL_COMPONENTS
 from harness_workbench.experiments import ExperimentSpec, core, provenance
 from harness_workbench.experiments.backends import LocalBackend
@@ -20,7 +20,7 @@ from harness_workbench.experiments.contracts import ExecutionResult, Measurement
 from harness_workbench.experiments.core import run_experiment
 from harness_workbench.experiments.manifest import EnvironmentConfig
 from harness_workbench.experiments.provenance import (
-    detect_drift, git_state, implementation_hash, provenance_record, unsupported_components,
+    detect_drift, git_state, implementation_hash, provenance_record, returned_model_status, unsupported_components,
 )
 from harness_workbench.experiments.status import DecisionStatus, ExecutionStatus
 from tests.support import ScriptedExecutor, exact_task, make_records, write_manifest
@@ -256,6 +256,68 @@ class CapabilityTests(PhaseCase):
         payload = self.run_exp(spec, executor)
         self.assertGreater(len(payload["runs"]), 0)
         self.assertFalse(any("does not declare support" in r for r in payload["decision"]["reasons"]))
+
+
+class FakeAnthropicClient:
+    """Stands in for AnthropicClient: the solver answers CORRECT and the returned model comes from ``models``."""
+
+    def __init__(self, models: list[str]) -> None:
+        self.models = models
+        self.solver_calls = 0
+
+    def complete(self, *, model: str, user: str, system: str = "", max_tokens: int = 4096) -> Completion:
+        if system == JUDGE_SYSTEM:
+            return Completion(json.dumps({"score": 1.0, "failures": [], "notes": "ok"}), model, 1, 1, "end_turn")
+        returned = self.models[self.solver_calls % len(self.models)]
+        self.solver_calls += 1
+        return Completion("CORRECT", returned, 1, 1, "end_turn")
+
+
+class ReturnedModelTests(PhaseCase):
+    """The provider's returned model ID must reach the trial, the drift check and the payload (spec section 9)."""
+
+    def run_with(self, models: list[str]) -> dict:
+        spec = self.spec("rm", ("a",))
+        return self.run_exp(spec, AnthropicHarnessExecutor(FakeAnthropicClient(models)))
+
+    def test_alternating_snapshots_invalidate_a_confirmatory_run(self) -> None:
+        payload = self.run_with(["snapshot-0", "snapshot-1"])
+        self.assertTrue(payload["runs"])
+        self.assertTrue(all(run["execution"]["returned_model"] in {"snapshot-0", "snapshot-1"}
+                            for run in payload["runs"]))
+        decision = payload["decision"]
+        self.assertEqual(decision["status"], DecisionStatus.INVALID_EXPERIMENT.value)
+        self.assertTrue(any("model drift" in reason for reason in decision["reasons"]), decision["reasons"])
+        self.assertEqual(payload["provenance"]["returned_model_status"], "mixed")
+        self.assertEqual(payload["provenance"]["returned_models"], ["snapshot-0", "snapshot-1"])
+
+    def test_one_stable_returned_model_is_verified(self) -> None:
+        payload = self.run_with(["snapshot-0"])
+        self.assertNotEqual(payload["decision"]["status"], DecisionStatus.INVALID_EXPERIMENT.value)
+        self.assertEqual(payload["provenance"]["returned_model_status"], "verified")
+        self.assertEqual(payload["provenance"]["returned_models"], ["snapshot-0"])
+        self.assertTrue(all(run["execution"]["returned_model"] == "snapshot-0" for run in payload["runs"]))
+
+    def test_a_provider_that_names_no_model_is_marked_unknown(self) -> None:
+        payload = self.run_with([""])
+        self.assertEqual(payload["provenance"]["returned_model_status"], "unknown")
+        self.assertEqual(payload["provenance"]["returned_models"], [])
+        self.assertNotEqual(payload["decision"]["status"], DecisionStatus.INVALID_EXPERIMENT.value)
+        self.assertIn("returned_model_status", (Path(payload["report_path"]).read_text(encoding="utf-8")))
+
+    def test_status_of_a_mix_of_reported_and_unreported_models_is_partial_not_drift(self) -> None:
+        spec = self.spec("st", ("a",))
+        records = make_records(spec, repetitions=1)
+        rubrics = {task.id: task.bundle_hash for task in spec.tasks}
+        self.assertEqual(returned_model_status(records), {"status": "unknown", "models": []})
+        records[0].execution.returned_model = "m1"
+        self.assertEqual(returned_model_status(records), {"status": "partial", "models": ["m1"]})
+        self.assertEqual(detect_drift(records, rubrics), [])  # a crashed or silent trial is a limitation, not drift
+        for record in records:
+            record.execution.returned_model = "m1"
+        self.assertEqual(returned_model_status(records), {"status": "verified", "models": ["m1"]})
+        records[1].execution.returned_model = "m2"
+        self.assertEqual(returned_model_status(records), {"status": "mixed", "models": ["m1", "m2"]})
 
 
 def confirmatory_with_tool(root: Path) -> Path:
