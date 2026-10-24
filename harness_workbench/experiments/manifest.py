@@ -386,6 +386,16 @@ def _validate_check(task_id: str, index: int, check: Any, grader_files: Path | N
             raise ManifestError(f"task {task_id}: grader file missing: {entry}")
 
 
+def _reject_duplicate_check_ids(task_id: str, checks: tuple[dict[str, Any], ...]) -> None:
+    """Check ids name the critical invariants, so two checks of one task may not share an id (explicit or implicit)."""
+    seen: set[str] = set()
+    for index, check in enumerate(checks):
+        identity = str(check.get("id") or f"check-{index + 1}")
+        if identity in seen:
+            raise ManifestError(f"task {task_id}: duplicate check id {identity!r}: check ids must be unique within a task")
+        seen.add(identity)
+
+
 def _critical_ids(checks: tuple[dict[str, Any], ...]) -> frozenset[str]:
     return frozenset(
         str(check.get("id") or f"check-{index + 1}")
@@ -441,6 +451,7 @@ def _task_spec(item: Any, base: Path, *, legacy: bool) -> TaskSpec:
     grader_files = _directory(base, item["grader_files"], f"{where} grader_files") if item.get("grader_files") else None
     for index, check in enumerate(checks):
         _validate_check(task_id, index, check, grader_files)
+    _reject_duplicate_check_ids(task_id, checks)
     fixture = _directory(base, item["fixture"], f"{where} fixture") if item.get("fixture") else None
     constraints = item.get("constraints") or []
     task = Task.from_text(

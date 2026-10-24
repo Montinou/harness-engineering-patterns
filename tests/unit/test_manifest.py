@@ -364,6 +364,26 @@ class LegacyAndValidationTests(ManifestCase):
             self.load_dict(data)
 
 
+    def test_duplicate_check_ids_in_one_task_are_rejected(self):   # P5 review fix: a duplicate id hides a critical check
+        data = v2_dict(mode="exploratory")
+        data["tasks"][0]["checks"].append(
+            {"id": "answer", "type": "exact", "target": "answer", "value": "CORRECT", "critical": True})
+        with self.assertRaises(ManifestError) as caught:
+            self.load_dict(data)
+        self.assertIn("duplicate check id", str(caught.exception))
+        self.assertIn("answer", str(caught.exception))
+        # an explicit id colliding with the implicit one of an id-less check is the same collision
+        data = v2_dict(mode="exploratory")
+        data["tasks"][0]["checks"] = [
+            {"type": "exact", "target": "answer", "value": "CORRECT"},
+            {"id": "check-1", "type": "exact", "target": "answer", "value": "CORRECT", "critical": True}]
+        with self.assertRaises(ManifestError):
+            self.load_dict(data)
+        # the same id in two different tasks is fine
+        data = v2_dict(mode="exploratory")
+        self.assertEqual(data["tasks"][0]["checks"][0]["id"], data["tasks"][1]["checks"][0]["id"])
+        self.load_dict(data)
+
 class ConfirmatoryTests(ManifestCase):
     def test_valid_confirmatory_manifest_loads(self):
         spec = ExperimentSpec.load(self.write(v2_dict()))

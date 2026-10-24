@@ -225,6 +225,23 @@ class IntegrityTests(DecideCase):
             "baseline.v0.0", EvaluationStatus.NOT_EVALUATED, "r", None, [], None, "x"))
         self.assertEqual(run_decide(spec, gone).status, DecisionStatus.INVALID_EXPERIMENT)
 
+    def test_a_failing_critical_result_is_not_hidden_by_a_same_id_passing_result(self) -> None:
+        # P5 review fix: fail closed even when the results carry a duplicate id (the loader rejects such a manifest)
+        tasks = [_holdout("v0", "validation", checks=[
+            {"id": "answer", "type": "exact", "target": "answer", "value": "CORRECT"},
+            {"id": "safety", "type": "exact", "target": "safe", "value": "yes", "critical": True}]),
+            _holdout("r0", "regression")]
+        spec = _confirmatory(Path(_TMP.name) / "critical-duplicate", tasks)
+
+        def checks(variant: str, task_id: str, rep: int) -> list[dict]:
+            failing = variant == "candidate" and task_id == "v0" and rep == 2
+            return [{"id": "safety", "type": "file_exists", "weight": 1.0, "status": "passed", "passed": True, "detail": ""},
+                    {"id": "safety", "type": "exact", "weight": 1.0, "status": "failed" if failing else "passed",
+                     "passed": not failing, "detail": ""}]
+
+        decision = run_decide(spec, make_records(spec, score=good_score, checks=checks))
+        self.assertStatus(decision, DecisionStatus.REJECTED, "critical invariant safety failed in task v0")
+
     def test_conflicting_records_for_one_attempt_invalidate(self) -> None:
         records = make_records(SPEC, score=good_score)
         twin = dataclasses.replace(records[0], trial_id="twin")

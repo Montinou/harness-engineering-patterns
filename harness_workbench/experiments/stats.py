@@ -560,9 +560,10 @@ def decide(plan: PrivateExperimentPlan, records: list[TrialRecord], *, spec: "Ex
             if record.variant_id != candidate_id or not record.usable:
                 continue
             for check_id in sorted(tasks[record.task_id].critical_check_ids):
-                check = next((c for c in record.evaluation.checks if isinstance(c, dict) and c.get("id") == check_id), None)
+                results = [c for c in record.evaluation.checks if isinstance(c, dict) and c.get("id") == check_id]
                 reason = f"critical invariant {check_id} failed in task {record.task_id}"
-                if (check is None or check.get("passed") is not True) and reason not in critical:
+                # fail closed: every result carrying the id must pass, so a duplicate id cannot hide a breach
+                if (not results or any(c.get("passed") is not True for c in results)) and reason not in critical:
                     critical.append(reason)
 
         # rule 6
