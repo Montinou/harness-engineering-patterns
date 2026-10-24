@@ -7,14 +7,11 @@ uncertainty; only independently verified outcomes can qualify for promotion.
 from __future__ import annotations
 
 import dataclasses
-import hashlib
 import math
 import os
-import platform
 import random
 import shutil
 import statistics
-import sys
 import tempfile
 import uuid
 from dataclasses import dataclass
@@ -35,6 +32,9 @@ from harness_workbench.experiments.grader import (
 )
 from harness_workbench.experiments.protocol import (
     FrozenSelection, build_plan, freeze_selection, holdout_fingerprints, select_finalist, verify_frozen,
+)
+from harness_workbench.experiments.provenance import (
+    adapter_supports, detect_drift, implementation_hash, provenance_record, unsupported_components,
 )
 from harness_workbench.experiments.stats import decide as default_decide
 from harness_workbench.experiments.status import (
@@ -62,19 +62,10 @@ class RunContext:
 # Deprecated alias: the persisted ``runs[]`` entry is now a TrialRecord.
 RunRecord = TrialRecord
 
+# Where git_state looks: the checkout the package was imported from.
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+
 _LEGACY_USAGE_PROVENANCE = frozenset({"estimated", "provider_reported", "adapter_reported"})
-
-
-def _implementation_hash() -> str:
-    """sha256 over the relative paths and bytes of ``harness_workbench/**/*.py``."""
-    package = Path(__file__).resolve().parents[1]
-    digest = hashlib.sha256()
-    for item in sorted(package.rglob("*.py")):
-        digest.update(item.relative_to(package).as_posix().encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(item.read_bytes())
-        digest.update(b"\0")
-    return digest.hexdigest()
 
 
 def _failed_execution(trial_id: str, status: ExecutionStatus, error: str) -> ExecutionResult:
@@ -540,15 +531,15 @@ def _settings(spec: ExperimentSpec) -> dict[str, Any]:
     }
 
 
-def _provenance(spec: ExperimentSpec, executor: Any) -> dict[str, Any]:
+def _provenance(spec: ExperimentSpec, executor: Any, record: dict[str, Any]) -> dict[str, Any]:
+    """The persisted provenance: the full record plus the manifest and adapter facts older readers use."""
     return {
+        **record,
         "manifest_sha256": spec.source_hash,
-        "python": sys.version.split()[0], "platform": platform.platform(),
-        "executor": type(executor).__name__,
         "workspace_and_seed_supported": any(
             callable(getattr(executor, name, None)) for name in ("execute_trial", "execute_case")),
         "source": str(spec.source) if spec.source else None,
-        "model": str(getattr(executor, "solver_model", "unreported")),
+        "model": record["model_requested"],
         "executor_configured": spec.executor_config.get("type", "model"),
     }
 
@@ -586,14 +577,15 @@ def run_experiment(spec: ExperimentSpec, executor: Any, root: str | Path, *,
 
 def _run(spec: ExperimentSpec, executor: Any, destination: Path, backend: ExecutionBackend, limits: ProcessLimits,
          db: Any, decide: Any) -> dict[str, Any]:
-    implementation_hash = _implementation_hash()
+    record = provenance_record(spec, executor, backend, root=_REPOSITORY_ROOT)
+    started_hash = record["implementation_hash"]
     plan = build_plan(spec)
     experiment_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S") + "-" + uuid.uuid4().hex[:12]
     db.start_experiment(experiment_id, name=spec.name, family=spec.family, mode=spec.mode,
-                        schema_version=spec.schema_version, plan=plan, implementation_hash=implementation_hash)
+                        schema_version=spec.schema_version, plan=plan, implementation_hash=started_hash)
     out_dir = destination / "experiments" / experiment_id
     out_dir.mkdir(parents=True, exist_ok=False)
-    runner = _Runner(spec, executor, backend, limits, db, experiment_id, implementation_hash)
+    runner = _Runner(spec, executor, backend, limits, db, experiment_id, started_hash)
     baseline = spec.variants[0]
     confirmatory = spec.mode == "confirmatory"
     fingerprints = holdout_fingerprints(spec) if confirmatory else {}
@@ -604,6 +596,8 @@ def _run(spec: ExperimentSpec, executor: Any, destination: Path, backend: Execut
     rerun_reason: str | None = None  # an interrupted attempt of this candidate already ran holdout trials
     reserved = False
     if confirmatory:
+        # A change the adapter cannot apply would be compared against nothing: refuse before any trial.
+        problems.extend(unsupported_components(spec, adapter_supports(executor)))
         snapshot = SnapshotLimits(limits.max_files, limits.max_total_bytes)
         for split in _HOLDOUT_SPLITS:
             for task in spec.tasks_in(split):
@@ -638,6 +632,12 @@ def _run(spec: ExperimentSpec, executor: Any, destination: Path, backend: Execut
         if exposed:
             db.record_holdout_exposure(task_fingerprints=exposed.values(), experiment_id=experiment_id)
         runner.grid(list(spec.variants), spec.tasks)
+    if confirmatory:  # a changed implementation, rubric or model makes the trials incomparable
+        problems.extend(detect_drift(runner.attempts, {task.id: task.bundle_hash for task in spec.tasks}))
+        # Every trial is stamped with the hash taken at the start, so compare it to the code as it is now.
+        if (finished_hash := implementation_hash()) != started_hash:
+            problems.append("implementation drift: the package code changed while the experiment ran "
+                            f"({started_hash[:12]} at start, {finished_hash[:12]} at the end)")
 
     # Diagnostics first: if they cannot be computed the experiment stays running, with no decision.
     summary = compare(spec, runner.final)
@@ -665,7 +665,7 @@ def _run(spec: ExperimentSpec, executor: Any, destination: Path, backend: Execut
         "mode": spec.mode,
         "schema_version": spec.schema_version,
         "settings": _settings(spec),
-        "provenance": _provenance(spec, executor),
+        "provenance": _provenance(spec, executor, record),
         "variants": [{"id": v.id, "harness": str(v.source), "sha256": v.fingerprint,
                       "version": v.harness.version} for v in spec.variants],
         "tasks": [{"id": task.id, "split": task.split.value if task.split else None, "family": task.family,

@@ -12,7 +12,7 @@ the A01 shadowing test is undecorated since T8 and runs through ``evaluate_bundl
 the A04 latency, both A10 and the A12 output-limit tests are undecorated since T9, the grader one runs
 through ``evaluate_bundle``; A02, A09 and the A12 persistence test are undecorated since T18, A02 and A09
 on v2 confirmatory manifests, the A12 crash modelled as a ``BaseException``; A03 and A04 are undecorated since
-T22, on v2 confirmatory manifests decided by ``stats.decide``).
+T22, on v2 confirmatory manifests decided by ``stats.decide``; the A12 implementation-hash test since T25).
  * A8 (low statistical power) has no unit reproduction; it is recreated as a
    statistical simulation in T24.
  * A11 (``test_improve_cli_can_require_experiment_validation`` fails outside CI
@@ -333,7 +333,6 @@ class A12Traceability(TempDirCase):
         record = _command_run(self.root, "import sys; sys.stdout.write('x' * 20_000_000)")
         self.assertLess(len(json.dumps(record.outputs)), 2_000_000)
 
-    @repro
     def test_results_carry_implementation_hash(self) -> None:
         """A12: adapter and workbench code are not hashed, so results cannot be tied to an implementation."""
         manifest = write_manifest(self.root / "m", tasks=[exact_task("t1")],

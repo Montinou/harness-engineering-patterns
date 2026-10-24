@@ -130,6 +130,9 @@ class AnthropicHarnessExecutor:
     name = "anthropic"
     # cost_tokens is the solver plus judge API usage sum.
     usage_provenance = "provider_reported"
+    # The solver sees the harness flattened into a system prompt: tools, subagents, skills, scripts and
+    # plugins never run, so a change to them cannot be tested here.
+    supports = frozenset({"system_prompt", "guardrails", "memory_config"})
 
     def __init__(
         self,
