@@ -12,7 +12,7 @@
 > briefs are not active specifications.
 
 
-Private collection of practical patterns and references for **Agent = Model + Harness**.
+Experimental collection of practical patterns and references for **Agent = Model + Harness**.
 
 Focused on improving reliability, adaptability and auditability of agentic systems without retraining the base model.
 
