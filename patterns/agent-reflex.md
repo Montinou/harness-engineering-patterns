@@ -28,4 +28,4 @@ Treat reflection as a learnable meta-skill.
 
 ## Applicability
 
-Useful when tools are noisy or users correct mid-trajectory (Circuito Evidence precheck, Quoth-2 tool calling, Panelite evaluation flows).
+Useful when tools are noisy or users correct mid-trajectory.

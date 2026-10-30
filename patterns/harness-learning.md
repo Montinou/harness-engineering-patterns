@@ -35,4 +35,4 @@ def harness_learning_step(task, harness, solver):
 
 ## Applicability
 
-High for Quoth-2 policies and Circuito Evidence/Packager loops where the “harness” is already code (routing, verification rules, tool selection).
+High for agent policies and verification loops where the “harness” is already code (routing, verification rules, tool selection).

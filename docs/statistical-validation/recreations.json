@@ -1,0 +1,144 @@
+{
+  "synthetic": true,
+  "profile": "binary_v1",
+  "overrides": {},
+  "method": "cluster_percentile_ci_v1",
+  "seed": 303,
+  "simulations": {
+    "null": 2000,
+    "power": 2000
+  },
+  "matrix": "recreations",
+  "unknown_usage": false,
+  "interval": {
+    "kind": "wilson",
+    "z": 1.6448536269514722,
+    "meaning": "one-sided 95 % bounds on the promotion rate (spec 5.4)"
+  },
+  "notes": [],
+  "scenarios": [
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "A2",
+        "kind": "null",
+        "n_units": 3,
+        "regression_units": 3,
+        "repetitions": 5,
+        "dev_candidates": 5,
+        "dev_units": 3,
+        "outcome": "binary",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 2000,
+      "promoted": 0,
+      "rate": 0.0,
+      "lower_95": 0.0,
+      "upper_95": 0.0013509442079184157,
+      "status_counts": {
+        "insufficient_evidence": 2000
+      },
+      "reason_counts": {
+        "independent units # is below min_independent_units #": 2000,
+        "regression units # is below min_regression_units #": 2000,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 1189,
+        "degenerate interval: zero variance across units": 84
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 303
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "A3",
+        "kind": "null",
+        "n_units": 1,
+        "regression_units": 1,
+        "repetitions": 5,
+        "dev_candidates": 1,
+        "dev_units": 1,
+        "outcome": "binary",
+        "p_base": 0.5,
+        "effect": 0.0,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 2000,
+      "promoted": 0,
+      "rate": 0.0,
+      "lower_95": 0.0,
+      "upper_95": 0.0013509442079184157,
+      "status_counts": {
+        "insufficient_evidence": 2000
+      },
+      "reason_counts": {
+        "independent units # is below min_independent_units #": 2000,
+        "primary bound unavailable: a bound needs at least # independent units, got #": 2000,
+        "regression group regression: a bound needs at least # independent units, got #": 2000,
+        "regression units # is below min_regression_units #": 2000
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 303
+    },
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "A8",
+        "kind": "power",
+        "n_units": 5,
+        "regression_units": 5,
+        "repetitions": 5,
+        "dev_candidates": 1,
+        "dev_units": 5,
+        "outcome": "binary",
+        "p_base": 0.5,
+        "effect": 0.2,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 2000,
+      "promoted": 0,
+      "rate": 0.0,
+      "lower_95": 0.0,
+      "upper_95": 0.0013509442079184157,
+      "status_counts": {
+        "insufficient_evidence": 2000
+      },
+      "reason_counts": {
+        "independent units # is below min_independent_units #": 2000,
+        "regression units # is below min_regression_units #": 2000,
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 1390,
+        "degenerate interval: zero variance across units": 2
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 303
+    }
+  ],
+  "implementation_hash": "ee30a2d0857e8822436dba882a30a7d91f7780591653cdef90adb57dfd94edae",
+  "python": "3.14.2 x86_64",
+  "wall_seconds": 107.35735612502322,
+  "runner": {
+    "kind": "modal",
+    "chunk_simulations": 250,
+    "chunks": 24,
+    "remote_python": [
+      "3.14.2 x86_64"
+    ],
+    "equivalence": "per-index RNG random.Random(f'{seed}:{scenario.id}:{index}'); chunk counters summed"
+  }
+}

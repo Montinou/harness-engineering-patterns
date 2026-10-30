@@ -24,5 +24,5 @@ The harness is the runtime system around a language model that turns reasoning i
 
 - Harness is versioned, editable and auditable (like code).
 - Prefer primary sources + independent checks over vendor claims.
-- Zero new findings is a valid result (Circuito style).
+- Zero new findings is a valid result.
 - Separate model inference from harness control.

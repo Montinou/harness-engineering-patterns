@@ -1,5 +1,15 @@
 # Self-Improving Harness Patterns — Research Compilation
 
+> **Historical research snapshot (2026-10-21).** The phased build plan and
+> minimum-feature checklist below describe the original proposal, **not**
+> current implementation status on feat/experimental-evaluation-layer.
+> The package is still 0.2.0 with an additional experimental layer.
+> See [current architecture](../docs/workbench.md),
+> [experiment contract](../docs/experiments.md), and
+> [verification](../docs/verification.md). Papers and quoted research results
+> are not experimental measurements produced by this repository.
+
+
 **Compiled:** 2026-10-21  
 **Sources:** Primary papers, official repos, AI Edge Tech adversarial audits (Oct 12–20 2026), and related implementations.
 
@@ -186,7 +196,7 @@ class Harness:
 
 ### Minimal viable features
 - Harness as files or structured JSON/YAML (easy to diff).
-- Pluggable executor (mock, Grok bot, Quoth-2, MCP).
+- Pluggable executor (mock, hosted bot, MCP).
 - Simple contrastive composer (no training required for v1).
 - Improvement library (Markdown or JSON per domain).
 - CLI: `propose`, `probe`, `improve`, `report`.
@@ -195,7 +205,7 @@ class Harness:
 1. **v0** — Offline mock + structured Harness + Propose–Probe–Compose (extend current examples).
 2. **v1** — Adapter to a real model/bot + persistence + library.
 3. **v2** — Optional trained proposer or reflection skill injection.
-4. **v3** — Integration with Quoth-2 policies or Circuito Evidence loop.
+4. **v3** — Integration with an existing agent's policies or evidence loop.
 
 ---
 
@@ -220,4 +230,4 @@ AI Edge Tech adversarial briefs (Oct 12–20 2026) in Drive (`AI-Edge-Tech-Pipel
 
 ---
 
-*This document is the reference for building the workbench. Update it as we implement.*
+*This document preserves the original research and build plan; refer to the linked feature-branch documentation for implemented behavior.*

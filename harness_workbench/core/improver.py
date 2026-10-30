@@ -8,14 +8,29 @@ the adopted harness forward. Nothing here trains a model.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
+from harness_workbench.core.db import StoreBusyError
 from harness_workbench.core.executor import BehavioralReport, Executor, MockExecutor, Task
 from harness_workbench.core.harness import Harness
 from harness_workbench.core.proposer import Candidate, Proposer, RuleBasedProposer, apply_edit
+from harness_workbench.experiments.backends import BackendUnavailable
+
+# A gate that could not run says nothing about the candidate: these are errors, never a rejection.
+_INFRASTRUCTURE_ERRORS = (OSError, StoreBusyError, BackendUnavailable)
 
 DEFAULT_MARGIN = 0.05
+
+
+@dataclass(frozen=True)
+class GateVerdict:
+    """The promotion gate's answer: whether the candidate qualifies and the decision that says so."""
+
+    approved: bool
+    decision_id: str | None = None
+    evidence: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -43,6 +58,7 @@ class ImprovementResult:
     k: int
     margin: float
     run_dir: Path | None = None
+    decision_id: str | None = None
 
     @property
     def base(self) -> Harness:
@@ -67,6 +83,7 @@ class ImprovementResult:
             "k": self.k,
             "margin": self.margin,
             "run_dir": str(self.run_dir) if self.run_dir else None,
+            "decision_id": self.decision_id,
             "base": {"id": self.base.id, "version": self.base.version, "score": self.base_report.score},
             "adopted": {
                 "id": self.adopted.id,
@@ -121,12 +138,14 @@ class Improver:
         executor: Executor | None = None,
         *,
         margin: float = DEFAULT_MARGIN,
+        promotion_gate: Callable[[Harness, Harness], bool | GateVerdict] | None = None,
     ) -> None:
         if margin < 0:
             raise ValueError("margin must be >= 0")
         self.proposer = proposer or RuleBasedProposer()
         self.executor = executor or MockExecutor()
         self.margin = margin
+        self.promotion_gate = promotion_gate
 
     def improve(
         self,
@@ -154,11 +173,57 @@ class Improver:
             step = self._step(harness, task, k=k, mode="parallel")
             result = self._result_from_steps([step], task=task, mode="parallel", k=k)
 
+        if self.promotion_gate is not None:
+            self._confirm(result)
+
         if root is not None:
             from harness_workbench.core.store import persist_result
 
-            result.run_dir = persist_result(Path(root), result)
+            result.run_dir = persist_result(Path(root), result, decision_id=result.decision_id)
         return result
+
+    def _confirm(self, result: ImprovementResult) -> None:
+        """Run the promotion gate once on the final adopted harness; roll the whole result back unless approved.
+
+        Intermediate sequential adoptions stay in ``steps`` as evidence. With a gate the library receives the
+        confirmed final composition as a direct child of the base, never the intermediate steps.
+        """
+        base, final = result.base, result.adopted
+        if final is base:
+            return
+        assert self.promotion_gate is not None
+        try:
+            verdict = self.promotion_gate(base, final)
+            if isinstance(verdict, bool):
+                verdict = GateVerdict(verdict)
+            elif not isinstance(verdict, GateVerdict):
+                raise TypeError(f"promotion gate must return bool or GateVerdict, got {type(verdict).__name__}")
+        except _INFRASTRUCTURE_ERRORS:
+            raise  # not a rejection of the candidate: nothing is persisted and the caller reports the failure
+        except Exception as exc:
+            self._roll_back(result, [f"VALIDATION ERROR: {type(exc).__name__}: {exc}"])
+            return
+        if verdict.approved:
+            result.decision_id = verdict.decision_id
+            final.lineage.parent_version = base.version
+            final.lineage.metrics = {
+                **final.lineage.metrics,
+                "base_score": result.base_report.score,
+                "delta": round(result.adopted_report.score - result.base_report.score, 4),
+            }
+            final.lineage.lessons = list(result.lessons)
+            result.versions = [base, final]
+            return
+        self._roll_back(result, ["VALIDATION REJECT: independently checked candidate did not qualify; base harness kept."])
+
+    @staticmethod
+    def _roll_back(result: ImprovementResult, lessons: list[str]) -> None:
+        result.lessons.extend(lessons)
+        last = result.steps[-1]
+        last.lessons.extend(lessons)
+        last.adopted = result.base
+        last.adopted_report = result.base_report
+        result.versions = [result.base]
 
     def _sequential(self, harness: Harness, task: Task, *, k: int) -> ImprovementResult:
         current = harness
@@ -200,6 +265,14 @@ class Improver:
         probed = [(candidate, self.executor.execute(candidate.harness, task)) for candidate in candidates]
         adopted, lessons = self._compose(harness, base_report, probed)
         adopted_report = base_report if adopted is harness else self.executor.execute(adopted, task)
+        if adopted is not harness and adopted_report.score - base_report.score <= self.margin:
+            lessons.append(
+                "ROLLBACK composed harness: independently re-probed composition did not "
+                f"beat base by margin {self.margin:.3f} "
+                f"(base={base_report.score:.3f}, composed={adopted_report.score:.3f})."
+            )
+            adopted = harness
+            adopted_report = base_report
         if adopted is not harness:
             adopted.lineage.metrics = _metrics(base_report, adopted_report, probed, k=k, mode=mode)
             adopted.lineage.lessons = list(lessons)

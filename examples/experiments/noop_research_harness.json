@@ -1,0 +1,35 @@
+{
+  "id": "research-agent",
+  "version": "2",
+  "name": "Research agent",
+  "domain": "research",
+  "system_prompt": "Answer the research question.",
+  "guardrails": [
+    "Keep answers short."
+  ],
+  "memory_config": {
+    "window": 2,
+    "strategy": "recent"
+  },
+  "tools": [
+    {
+      "name": "calc",
+      "description": "Basic calculator.",
+      "schema": {},
+      "guidance": ""
+    }
+  ],
+  "subagents": [],
+  "skills": [],
+  "scripts": [],
+  "plugins": [],
+  "notes": "Synthetic no-op candidate for the confirmatory demo: a guardrail that changes nothing the demo agent reads, NOT a learned improvement.",
+  "lineage": {
+    "parent_id": "research-agent",
+    "parent_version": "1",
+    "created_at": "2026-10-22T00:00:00Z",
+    "source": "example",
+    "metrics": {},
+    "lessons": []
+  }
+}

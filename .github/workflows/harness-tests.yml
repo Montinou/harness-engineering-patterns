@@ -1,0 +1,145 @@
+name: Harness Workbench Tests
+on:
+  push:
+    branches: ["feat/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    # bash (not the implicit `bash -e {0}`) adds pipefail, so a failing command before a pipe fails the step.
+    shell: bash
+
+jobs:
+  # Core suite on the supported interpreters, with the package installed (editable).
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install workbench
+        run: python -m pip install -e .
+      - name: Run unit and regression tests
+        run: python -m unittest discover -s tests -v
+
+  # Spec section 9: the suite must pass from a clean checkout with no installation of any kind.
+  no-install:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Report /usr/bin/python on this runner image
+        run: |
+          # Informational: manifests use {python}, never a bare `python`, so the suite must not depend on this.
+          if [ -e /usr/bin/python ]; then
+            echo "/usr/bin/python present: $(ls -l /usr/bin/python)"
+          else
+            echo "/usr/bin/python absent"
+          fi
+      - name: Confirm the package is not installed
+        run: |
+          if python -m pip show harness-workbench >/dev/null 2>&1; then
+            echo "harness-workbench is installed; this job must run from the checkout only" >&2
+            exit 1
+          fi
+          echo "harness-workbench is not installed"
+      - name: Run unit and regression tests from the checkout
+        run: python -m unittest discover -s tests -v
+
+  # Real container isolation. A skipped sandbox test is NOT RUN, so any skip fails the job.
+  isolation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install workbench
+        run: python -m pip install -e .
+      - name: Pull the sandbox image
+        run: docker pull python:3.12-slim
+      - name: Run the sandbox backend tests
+        env:
+          HARNESS_SANDBOX_TESTS: "1"
+        run: |
+          python -m unittest tests.integration.test_sandbox_backend -v 2>&1 | tee "$RUNNER_TEMP/sandbox-tests.log"
+          if grep -qi "skipped" "$RUNNER_TEMP/sandbox-tests.log"; then
+            echo "NOT RUN: sandbox tests were skipped (Docker unavailable or the capability self-test failed)" >&2
+            exit 1
+          fi
+      - name: Sandboxed demo experiment is eligible
+        run: |
+          root="$RUNNER_TEMP/isolation-root"
+          mkdir -p "$root"
+          harness-workbench experiment --provider command --spec examples/experiments/sandboxed-demo.json --root "$root" --json > "$RUNNER_TEMP/sandboxed.json"
+          python -c "import json,os; d=json.load(open(os.path.join(os.environ['RUNNER_TEMP'], 'sandboxed.json'))); assert d['decision']['status'] == 'eligible', d['decision']"
+
+  # Wheel and editable installs run the demo manifest from a foreign cwd with no python on PATH.
+  portability:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Remove the /usr/bin/python alias and assert it is absent
+        run: |
+          # The portability script puts /usr/bin on PATH and fails if any `python` is found there. Current
+          # runner images ship /usr/bin/python -> python3, so remove that alias on this ephemeral runner to
+          # recreate the "no python alias" condition, then assert it. Fail with a clear reason if it persists.
+          sudo rm -f /usr/bin/python
+          if [ -e /usr/bin/python ] || [ -L /usr/bin/python ]; then
+            echo "/usr/bin/python exists on this runner image: $(ls -l /usr/bin/python)" >&2
+            echo "Portability with no python alias cannot be shown on this image; declare it unverified." >&2
+            exit 1
+          fi
+          echo "/usr/bin/python absent"
+      - name: Install build tooling
+        run: python -m pip install setuptools wheel
+      - name: Run the portability tests (a skip, including NOT RUN exit 3, fails the job)
+        env:
+          HARNESS_PORTABILITY_TESTS: "1"
+        run: |
+          python -m unittest tests.integration.test_portability -v 2>&1 | tee "$RUNNER_TEMP/portability-tests.log"
+          if grep -qi "skipped" "$RUNNER_TEMP/portability-tests.log"; then
+            echo "NOT RUN: the portability script was skipped or reported NOT RUN (exit 3); a skip is not a pass" >&2
+            exit 1
+          fi
+
+  # End-to-end experiment smoke with the installed console script.
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install workbench
+        run: python -m pip install -e .
+      - name: Confirmatory demo is eligible
+        run: |
+          root="$RUNNER_TEMP/smoke-confirmatory-root"
+          mkdir -p "$root"
+          harness-workbench experiment --provider command --spec examples/experiments/confirmatory-demo.json --root "$root" --json > "$RUNNER_TEMP/confirmatory.json"
+          python -c "import json,os; d=json.load(open(os.path.join(os.environ['RUNNER_TEMP'], 'confirmatory.json'))); assert d['decision']['status'] == 'eligible', d['decision']"
+      - name: Local command demo is exploratory only
+        run: |
+          root="$RUNNER_TEMP/smoke-local-root"
+          mkdir -p "$root"
+          harness-workbench experiment --provider command --spec examples/experiments/local-command.json --root "$root" --json > "$RUNNER_TEMP/local.json"
+          python -c "import json,os; d=json.load(open(os.path.join(os.environ['RUNNER_TEMP'], 'local.json'))); assert d['decision']['status'] == 'exploratory_only', d['decision']"

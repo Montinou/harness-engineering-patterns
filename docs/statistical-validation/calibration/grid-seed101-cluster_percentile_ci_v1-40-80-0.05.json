@@ -1,0 +1,60 @@
+{
+  "synthetic": true,
+  "profile": "binary_v1",
+  "matrix": "target-screen",
+  "overrides": {
+    "method": "cluster_percentile_ci_v1",
+    "min_independent_units": 40,
+    "min_regression_units": 80,
+    "regression_margin": 0.05
+  },
+  "method": "cluster_percentile_ci_v1",
+  "seed": 101,
+  "simulations": {
+    "power": 1000
+  },
+  "scenarios": [
+    {
+      "synthetic": true,
+      "scenario": {
+        "id": "target-power",
+        "kind": "power",
+        "n_units": 40,
+        "regression_units": 80,
+        "repetitions": 5,
+        "dev_candidates": 5,
+        "dev_units": 40,
+        "outcome": "binary",
+        "p_base": 0.5,
+        "effect": 0.2,
+        "effect_concentration": 1.0,
+        "family_size": 1,
+        "family_correlation": 0.0,
+        "regression_effect": 0.0,
+        "error_rate": 0.0,
+        "difficulty_spread": 0.0
+      },
+      "simulations": 1000,
+      "promoted": 363,
+      "rate": 0.363,
+      "lower_95": 0.33838858387484433,
+      "upper_95": 0.38835073477285004,
+      "status_counts": {
+        "eligible": 363,
+        "insufficient_evidence": 565,
+        "rejected": 72
+      },
+      "reason_counts": {
+        "regression group regression: non-inferiority undecided (estimate #, lower bound # <= -margin #)": 565,
+        "improvement supported: lower bound # > margin #; no integrity, budget or regression block": 363,
+        "improvement not supported: lower bound # <= margin #": 71,
+        "regression group regression: demonstrated regression (estimate #, upper bound # < -margin #)": 1
+      },
+      "method": "cluster_percentile_ci_v1",
+      "seed": 101
+    }
+  ],
+  "note": "screened on the target power scenario only; null scenarios not run because the point failed it",
+  "python": "3.14.7 (main, Aug  5 2026, 10:29:49) [Clang 21.0.0 (clang-2100.1.1.101)]",
+  "wall_seconds": 31.691519499989226
+}

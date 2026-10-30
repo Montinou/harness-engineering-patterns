@@ -1,12 +1,13 @@
 """Command line for the Harness Workbench.
 
-Commands: propose, probe, improve, report.
+Commands: propose, probe, improve, experiment, migrate-manifest, export-library, migrate-library, report.
 The default path is offline (rule proposer, mock executor).
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -23,9 +24,19 @@ from harness_workbench.core.anthropic_backend import (
 )
 from harness_workbench.core.executor import Executor, MockExecutor, Task
 from harness_workbench.core.harness import Harness, load_harness
-from harness_workbench.core.improver import DEFAULT_MARGIN, Improver
+from harness_workbench.core.improver import DEFAULT_MARGIN, GateVerdict, Improver
 from harness_workbench.core.proposer import FileProposer, LLMProposer, Proposer, ProposerError, RuleBasedProposer
-from harness_workbench.core.store import known_harness_ids, lineage_chain, load_versions
+from harness_workbench.core.db import LineageConflict, PromotionConflict, SchemaMismatch, StoreBusyError
+from harness_workbench.experiments.backends import BackendUnavailable, require_backend
+from harness_workbench.core.store import (
+    ExportError,
+    MigrationRequired,
+    export_library,
+    known_harness_ids,
+    lineage_chain,
+    load_versions,
+    preflight_library,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -34,7 +45,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return int(args.func(args))
-    except (FileNotFoundError, ValueError, ProposerError, AnthropicError, OSError) as exc:
+    except (
+        FileNotFoundError, ValueError, ProposerError, AnthropicError, OSError,
+        MigrationRequired, ExportError, LineageConflict, SchemaMismatch, StoreBusyError,
+        BackendUnavailable, PromotionConflict,
+    ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
@@ -70,8 +85,38 @@ def build_parser() -> argparse.ArgumentParser:
     improve.add_argument("--margin", type=float, default=DEFAULT_MARGIN, help="minimum score delta to adopt an edit")
     improve.add_argument("--root", type=Path, default=Path("."), help="where runs/ and library/ are written")
     improve.add_argument("--edits-file", type=Path, help="JSON edits from an external model, instead of the proposer")
+    improve.add_argument("--validation-spec", type=Path, help="require independent repeated acceptance checks before adoption")
     improve.add_argument("--json", action="store_true")
     improve.set_defaults(func=_cmd_improve)
+
+    experiment = sub.add_parser("experiment", help="run matched, repeated harness comparisons with acceptance checks")
+    experiment.add_argument("--spec", type=Path, help="experiment manifest JSON (required unless --list-incomplete)")
+    experiment.add_argument("--list-incomplete", action="store_true",
+                            help="list experiments left running by an interrupted run and exit")
+    experiment.add_argument("--root", type=Path, default=Path("."), help="where experiments/ is written")
+    _add_provider_args(experiment)
+    experiment.add_argument("--json", action="store_true")
+    experiment.set_defaults(func=_cmd_experiment)
+
+    migrate = sub.add_parser("migrate-manifest", help="convert a schema v1 experiment manifest to schema v2")
+    migrate.add_argument("--spec", type=Path, required=True, help="schema v1 experiment manifest JSON")
+    migrate.add_argument("--out", type=Path, help="where to write the schema v2 manifest")
+    migrate.add_argument("--splits", type=Path, help="JSON object mapping task id to development|validation|regression")
+    migrate.add_argument("--dry-run", action="store_true", help="print the result and write nothing")
+    migrate.set_defaults(func=_cmd_migrate_manifest)
+
+    export = sub.add_parser("export-library", help="regenerate the JSON library views from the database")
+    export.add_argument("--root", type=Path, default=Path("."), help="where library/ lives")
+    export.add_argument("--json", action="store_true", help="print the regenerated paths as a JSON list")
+    export.set_defaults(func=_cmd_export_library)
+
+    migrate_lib = sub.add_parser(
+        "migrate-library", help="import legacy library JSON versions into the database (idempotent, backs up first)"
+    )
+    migrate_lib.add_argument("--root", type=Path, default=Path("."), help="where library/ lives")
+    migrate_lib.add_argument("--dry-run", action="store_true", help="report what would be imported and write nothing")
+    migrate_lib.add_argument("--json", action="store_true", help="print the report as JSON")
+    migrate_lib.set_defaults(func=_cmd_migrate_library)
 
     report = sub.add_parser("report", help="show saved lineage, metrics and lessons")
     report.add_argument("--root", type=Path, default=Path("."))
@@ -101,7 +146,7 @@ def _task(args: argparse.Namespace) -> Task:
 def _add_provider_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--provider",
-        choices=("mock", "anthropic"),
+        choices=("mock", "anthropic", "command"),
         default="mock",
         help="mock is offline; anthropic uses Sonnet to solve and Haiku to improve",
     )
@@ -205,13 +250,56 @@ def _cmd_probe(args: argparse.Namespace) -> int:
 
 
 def _cmd_improve(args: argparse.Namespace) -> int:
+    from dataclasses import replace
+    from harness_workbench.experiments import ExperimentSpec, run_experiment
+    from harness_workbench.experiments.manifest import Variant
+    from harness_workbench.experiments.status import DecisionStatus
+
     harness = load_harness(args.harness)
     task = _task(args)
+    validation_spec = ExperimentSpec.load(args.validation_spec) if args.validation_spec else None
+    if validation_spec is not None and validation_spec.mode != "confirmatory":
+        raise ValueError(
+            "validation spec is exploratory (schema v1 or mode exploratory); run 'harness-workbench "
+            "migrate-manifest' and assign splits and controls")
+    # What the library would refuse after the run (unmigrated JSON, a conflicting base) is refused before the
+    # gate reserves holdout tasks or any model call is paid for (exit 2).
+    preflight_library(args.root, harness)
+    # An execution backend the spec asks for must exist before anything runs or is paid for (exit 2).
+    validation_backend = require_backend(validation_spec.environment) if validation_spec is not None else None
     proposer, executor = _backend(args)
-    improver = Improver(proposer, executor, margin=args.margin)
+    gate = None
+    validation_evidence: list[dict] = []
+    if validation_spec is not None:
+        if validation_spec.executor.type == "command":
+            from harness_workbench.experiments.command import CommandHarnessExecutor
+            validation_executor = CommandHarnessExecutor.from_config(validation_spec.executor, validation_spec.environment)
+        else:
+            validation_executor = executor
+
+        def gate(before: Harness, candidate: Harness) -> GateVerdict:
+            def variant(identity: str, value: Harness) -> Variant:
+                fingerprint = hashlib.sha256(value.to_json().encode("utf-8")).hexdigest()
+                return Variant(identity, value, Path("(dynamically-composed)"), fingerprint,
+                               value.execution_config_hash())
+
+            controlled = replace(validation_spec, variants=(
+                variant("baseline", before), variant("candidate", candidate),
+            ))
+            outcome = run_experiment(controlled, validation_executor, args.root, backend=validation_backend)
+            evidence = {
+                "report": outcome["report_path"], "results": outcome["results_path"],
+                "decision": outcome["decision"],
+            }
+            validation_evidence.append(evidence)
+            # Only the persisted decision approves; the per-variant contrasts are diagnostics.
+            return GateVerdict(outcome["decision"]["status"] == DecisionStatus.ELIGIBLE.value,
+                               outcome["decision_id"], evidence)
+
+    improver = Improver(proposer, executor, margin=args.margin, promotion_gate=gate)
     result = improver.improve(harness, task, k=args.k, mode=args.mode, root=args.root)
     if args.json:
-        print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
+        print(json.dumps(result.to_dict() | {"validation_evidence": validation_evidence}, indent=2, ensure_ascii=False))
         return 0
     for index, step in enumerate(result.steps, start=1):
         print(
@@ -230,7 +318,175 @@ def _cmd_improve(args: argparse.Namespace) -> int:
         print(f"  - {lesson}")
     if result.run_dir is not None:
         print(f"saved {result.run_dir}")
+    for evidence in validation_evidence:
+        print(f"validation {evidence['report']}  decision={evidence['decision']['status']}")
     return 0
+
+
+def _number(value: object, spec: str) -> str:
+    return "unknown" if value is None else format(value, spec)
+
+
+def _variant_line(name: str, stats: dict) -> str:
+    pass_rate = "unknown" if stats["pass_rate"] is None else f"{stats['pass_rate']:.0%}"
+    return (f"  {name:20} quality={_number(stats['mean_score'], '.3f')} pass={pass_rate} "
+            f"tokens={_number(stats['mean_tokens'], '.0f')}")
+
+
+def _cmd_experiment(args: argparse.Namespace) -> int:
+    from harness_workbench.experiments import ExperimentSpec, run_experiment
+
+    if args.list_incomplete:
+        from harness_workbench.core.db import WorkbenchDB
+
+        preflight_library(args.root.resolve())  # opening the database would hide a legacy library from report
+        db = WorkbenchDB.open(args.root.resolve())
+        try:
+            incomplete = db.incomplete_experiments()
+        finally:
+            db.close()
+        if args.json:
+            print(json.dumps(incomplete, indent=2))
+        else:
+            for experiment_id in incomplete:
+                print(experiment_id)
+        return 0
+    if args.spec is None:
+        raise ValueError("--spec is required unless --list-incomplete is given")
+    spec = ExperimentSpec.load(args.spec)
+    if args.provider == "command":
+        if spec.executor.type != "command":
+            raise ValueError("--provider command requires executor.type 'command' in the manifest")
+        from harness_workbench.experiments.command import CommandHarnessExecutor
+        executor = CommandHarnessExecutor.from_config(spec.executor, spec.environment)
+    else:
+        _proposer, executor = _backend(args)
+    result = run_experiment(spec, executor, args.root)
+    if args.json:
+        print(json.dumps({
+            "experiment_id": result["experiment_id"],
+            "mode": result["mode"],
+            "decision": result["decision"],
+            "decision_id": result["decision_id"],
+            "summary": result["summary"],
+            "report_path": result["report_path"],
+            "results_path": result["results_path"],
+        }, indent=2))
+    else:
+        _print_experiment(result, spec.name)
+    return 0
+
+
+def _statistic(value: object, spec: str = "+.4f") -> str:
+    return "unavailable" if value is None else format(value, spec)
+
+
+def _print_experiment(result: dict, name: str) -> None:
+    """Text output: the decision status first, with what it rests on and what the data is."""
+    from harness_workbench.experiments.report import EXPLORATORY_NOTICE, SYNTHETIC_LABEL, is_exploratory, is_synthetic
+
+    decision = result["decision"]
+    diagnostics = decision.get("diagnostics") or {}
+    print(f"experiment {result['experiment_id']}  {name}")
+    if is_synthetic(result):
+        print(SYNTHETIC_LABEL)
+    print(f"decision {decision['status']}")
+    for reason in decision["reasons"]:
+        print(f"  {reason}")
+    print(f"estimate {_statistic(decision.get('estimate'))}  lower_bound {_statistic(decision.get('lower_bound'))}  "
+          f"n_units {decision.get('n_units', 0)}  "
+          f"n_regression_units {diagnostics.get('n_regression_units', 'unavailable')}  "
+          f"method {diagnostics.get('method', 'unavailable')}")
+    print(f"mode {result['mode']}")
+    if is_exploratory(result):
+        print(EXPLORATORY_NOTICE)
+    for variant, stats in result["summary"]["variants"].items():
+        print(_variant_line(variant, stats))
+    print(f"report {result['report_path']}")
+    print(f"data   {result['results_path']}")
+
+
+def _rebase_paths(data: dict, source_dir: Path, target_dir: Path) -> None:
+    """Rewrite the manifest's relative paths so they still resolve from ``target_dir``."""
+    def rebased(value: str) -> str:
+        return os.path.relpath((source_dir / value).resolve(), target_dir.resolve())
+
+    if isinstance(data.get("baseline"), str):
+        data["baseline"] = rebased(data["baseline"])
+    for variant in data.get("variants") or []:
+        if isinstance(variant, dict) and isinstance(variant.get("harness"), str):
+            variant["harness"] = rebased(variant["harness"])
+    for task in data.get("tasks") or []:
+        if not isinstance(task, dict):
+            continue
+        for key in ("fixture", "grader_files"):
+            if isinstance(task.get(key), str) and task[key]:
+                task[key] = rebased(task[key])
+
+
+def _cmd_migrate_manifest(args: argparse.Namespace) -> int:
+    from harness_workbench.experiments.manifest import ManifestError, migrate_manifest
+    from harness_workbench.experiments.validation import json_dumps_strict, json_loads_strict
+
+    if not args.dry_run and args.out is None:
+        raise ValueError("--out is required unless --dry-run is given")
+    spec_path = args.spec.resolve()
+    if args.out is not None and args.out.resolve() == spec_path:
+        raise ValueError("refusing to overwrite the input manifest; choose a different --out")
+    try:
+        data = json_loads_strict(spec_path.read_text(encoding="utf-8"))
+        splits = None
+        if args.splits is not None:
+            splits = json_loads_strict(args.splits.read_text(encoding="utf-8"))
+            if not isinstance(splits, dict):
+                raise ManifestError("--splits must be a JSON object mapping task id to split")
+        migrated = migrate_manifest(data, splits=splits)
+    except ManifestError:
+        raise
+    except ValueError as exc:  # includes ValidationError and JSON decode errors
+        raise ManifestError(f"{args.spec}: {exc}") from exc
+    target_dir = (args.out.resolve().parent if args.out is not None else spec_path.parent)
+    _rebase_paths(migrated, spec_path.parent, target_dir)
+    for note in migrated["_migration_notes"]:
+        print(f"warning: {note}", file=sys.stderr)
+    text = json_dumps_strict(migrated, indent=2, ensure_ascii=False) + "\n"
+    if args.dry_run:
+        print(text, end="")
+        return 0
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(text, encoding="utf-8")
+    print(f"wrote {args.out}")
+    return 0
+
+
+def _cmd_export_library(args: argparse.Namespace) -> int:
+    paths = export_library(args.root)
+    if args.json:
+        print(json.dumps([str(path) for path in paths], indent=2))
+    else:
+        for path in paths:
+            print(path)
+    return 0
+
+
+def _cmd_migrate_library(args: argparse.Namespace) -> int:
+    from harness_workbench.core.migrate import migrate_library
+
+    report = migrate_library(args.root, dry_run=args.dry_run)
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2))
+    else:
+        verb = "would import" if report.dry_run else "imported"
+        for harness_id, version in report.imported:
+            print(f"{verb} {harness_id} v{version}")
+        for harness_id, version in report.skipped:
+            print(f"skipped {harness_id} v{version} (already in the database)")
+        for conflict in report.conflicts:
+            print(f"conflict {conflict}")
+        for backup in report.backups:
+            print(f"backup {backup}")
+        print(f"{verb} {len(report.imported)}, skipped {len(report.skipped)}, conflicts {len(report.conflicts)}")
+    return 1 if report.conflicts else 0
 
 
 def _cmd_report(args: argparse.Namespace) -> int:

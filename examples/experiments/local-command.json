@@ -1,0 +1,65 @@
+{
+  "schema_version": 2,
+  "name": "offline-command-smoke-test",
+  "mode": "exploratory",
+  "baseline": "../workbench/base_research_harness.json",
+  "variants": [
+    {
+      "id": "verification",
+      "harness": "verified_research_harness.json"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "research-smoke",
+      "description": "Return CORRECT and write report.txt as PASS",
+      "domain": "research",
+      "fixture": "fixture",
+      "checks": [
+        {
+          "id": "answer",
+          "type": "exact",
+          "target": "answer",
+          "value": "CORRECT"
+        },
+        {
+          "id": "artifact",
+          "type": "file_equals",
+          "path": "report.txt",
+          "value": "PASS"
+        }
+      ],
+      "split": "development",
+      "family": "research-smoke",
+      "runs_candidate_code": false
+    }
+  ],
+  "repetitions": 5,
+  "seed": 42,
+  "statistics": {
+    "bootstrap_iterations": 300
+  },
+  "environment": {
+    "mode": "trusted_local"
+  },
+  "executor": {
+    "type": "command",
+    "argv": [
+      "{python}",
+      "-I",
+      "{demo_agent}"
+    ],
+    "model": "synthetic-fixture-agent",
+    "timeout_seconds": 30,
+    "supports": [
+      "system_prompt",
+      "guardrails",
+      "memory_config",
+      "tools",
+      "subagents",
+      "skills",
+      "scripts",
+      "plugins"
+    ]
+  }
+}
