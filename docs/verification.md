@@ -12,14 +12,13 @@ changes do not demonstrate correctness beyond the specific evidence below.
 
 ## CI evidence for the current work
 
-**Pending (T33).** The audit remediation has not been pushed, so GitHub Actions has not run on it. This line is
-filled by T33 with the run id, the head SHA and the per-job conclusion of
-`.github/workflows/harness-tests.yml` (`core` on 3.10, 3.12 and 3.13, `no-install`, `isolation`, `portability`,
-`smoke`):
+GitHub Actions run 41036918917 (`pull_request`, workflow `.github/workflows/harness-tests.yml`) on head
+`7775390`, the last commit of PR #1 before its squash merge (`46e3413` on `main`). All seven jobs concluded
+`success`: `core` on 3.10, 3.12 and 3.13, `no-install`, `isolation`, `portability` and `smoke`. The first run on
+`91c29d1` failed only `portability`, at its precondition guard (the runner image ships `/usr/bin/python`); the job
+now removes that alias before asserting its absence (`3d064da`).
 
-- Run: _not run yet_. Source commit: _pending_. Conclusion: _pending_.
-
-No run id is claimed for this work. A job that skips (Docker unavailable, `setuptools` missing) is reported as
+A job that skips (Docker unavailable, `setuptools` missing) is reported as
 **not run**, not as passed.
 
 ## Local evidence (not CI)
