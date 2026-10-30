@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-Research notes on harness engineering (`docs/`, `patterns/`, `research/`, `references/`, `applications/`) plus one real implementation, the **Harness Workbench** (`harness_workbench/`), a stdlib-only Python package (>=3.10, zero dependencies). `examples/*.py` are standalone sketches that deliberately do not import the package; leave them that way. Architecture write-up: `docs/workbench.md`.
+Research notes on harness engineering (`docs/`, `patterns/`, `research/`, `references/`) plus one real implementation, the **Harness Workbench** (`harness_workbench/`), a stdlib-only Python package (>=3.10, zero dependencies). `examples/*.py` are standalone sketches that deliberately do not import the package; leave them that way. Architecture write-up: `docs/workbench.md`.
 
 ## Commands
 
