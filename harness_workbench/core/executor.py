@@ -108,7 +108,7 @@ class BehavioralReport:
 class Executor(Protocol):
     """Something that can run a harness on a task and return a report.
 
-    Real adapters (a Grok bot, Quoth-2, an MCP runner) implement this.
+    Real adapters (a hosted bot, an MCP runner) implement this.
     They must probe candidates under matched conditions.
     """
 

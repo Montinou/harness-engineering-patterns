@@ -196,7 +196,7 @@ Strong for tools that return noisy/malformed results or mid-trajectory user corr
 ### Cost & risk notes
 - Probing multiplies tokens (especially k>1).
 - Behavioral contrasts can inherit model biases — keep primary-source / counterevidence checks.
-- Always version and audit harness changes (Circuito style).
+- Always version and audit harness changes.
 - Start with k=1 and measure before scaling.
 
 ---

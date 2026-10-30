@@ -27,7 +27,6 @@ Changing the harness alone can move performance by tens of points. Recent work (
 - `docs/` — Pattern write-ups and references
 - `patterns/` — Concrete pattern descriptions + pseudocode sketches
 - `references/` — Key papers and repos (as of Oct 2026)
-- `applications/` — Mapping to Quoth-2, Circuito Ontológico, Panelite, etc.
 
 ## Key papers (Oct 2026)
 
@@ -197,11 +196,10 @@ Actions run exists for this work yet; the 36-test, Python 3.12 run in
 
 [BUILD_INSTRUCTION.md](BUILD_INSTRUCTION.md) is an archived v1 work request.
 The original [research roadmaps](research/) are dated research snapshots, not
-the current implementation backlog. [Application mappings](applications/quoth2-and-circuito.md)
-describe ideas for other projects, not integrations verified in this branch.
+the current implementation backlog.
 
 Refer to [docs/workbench.md](docs/workbench.md) and
 [docs/experiments.md](docs/experiments.md) for implemented behavior.
 
 ---
-*Private repo. For internal use on agent reliability and Quoth-2 evolution.*
+*Experimental research project on harness engineering for agent reliability. Every result in this repository is synthetic; nothing here measures a real language model yet.*

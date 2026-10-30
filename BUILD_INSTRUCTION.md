@@ -11,7 +11,7 @@
 > remain intact for provenance.
 
 
-You are building on the private repository:
+You are building on the repository:
 **https://github.com/Montinou/harness-engineering-patterns**
 
 ## Goal
@@ -35,7 +35,6 @@ Read these files first and use them as the source of truth:
 - `patterns/harness2.md`
 - `patterns/agent-reflex.md`
 - `examples/` (existing demos)
-- `applications/quoth2-and-circuito.md`
 
 ## What to build (v1)
 

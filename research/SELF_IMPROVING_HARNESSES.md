@@ -196,7 +196,7 @@ class Harness:
 
 ### Minimal viable features
 - Harness as files or structured JSON/YAML (easy to diff).
-- Pluggable executor (mock, Grok bot, Quoth-2, MCP).
+- Pluggable executor (mock, hosted bot, MCP).
 - Simple contrastive composer (no training required for v1).
 - Improvement library (Markdown or JSON per domain).
 - CLI: `propose`, `probe`, `improve`, `report`.
@@ -205,7 +205,7 @@ class Harness:
 1. **v0** — Offline mock + structured Harness + Propose–Probe–Compose (extend current examples).
 2. **v1** — Adapter to a real model/bot + persistence + library.
 3. **v2** — Optional trained proposer or reflection skill injection.
-4. **v3** — Integration with Quoth-2 policies or Circuito Evidence loop.
+4. **v3** — Integration with an existing agent's policies or evidence loop.
 
 ---
 

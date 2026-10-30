@@ -34,4 +34,4 @@ Two levels of recursion while keeping model weights frozen:
 
 ## Applicability
 
-Very high for production agents that face novel tasks (Quoth-2, Circuito research runs). Start with k=1 and measure token cost vs gain on real workflows.
+Very high for production agents that face novel tasks. Start with k=1 and measure token cost vs gain on real workflows.

@@ -226,6 +226,4 @@ This implementation is inspired by Harness Learning, Harness² and Agent-Reflex
 but is not a full reproduction of their reported results. The original design
 brief and dated research roadmaps are archived as historical documents.
 See [docs/verification.md](verification.md) for evidence and non-verified claims,
-[docs/audit-remediation.md](audit-remediation.md) for the audit map and remaining limitations,
-and [application proposals](../applications/quoth2-and-circuito.md) for
-conceptual mappings to other independent systems.
+[docs/audit-remediation.md](audit-remediation.md) for the audit map and remaining limitations.
