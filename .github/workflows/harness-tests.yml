@@ -96,10 +96,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Assert /usr/bin/python is absent on this runner image
+      - name: Remove the /usr/bin/python alias and assert it is absent
         run: |
-          # The portability script puts /usr/bin on PATH and fails if any `python` is found there, so a runner
-          # image that ships /usr/bin/python cannot demonstrate "no python alias". Fail with a clear reason.
+          # The portability script puts /usr/bin on PATH and fails if any `python` is found there. Current
+          # runner images ship /usr/bin/python -> python3, so remove that alias on this ephemeral runner to
+          # recreate the "no python alias" condition, then assert it. Fail with a clear reason if it persists.
+          sudo rm -f /usr/bin/python
           if [ -e /usr/bin/python ] || [ -L /usr/bin/python ]; then
             echo "/usr/bin/python exists on this runner image: $(ls -l /usr/bin/python)" >&2
             echo "Portability with no python alias cannot be shown on this image; declare it unverified." >&2
