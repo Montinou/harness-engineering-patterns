@@ -9,7 +9,7 @@ from benchmarks.livecodebench.canonical import (
     canonical_value,
     digest,
 )
-from tests.benchmarks.lcb_reference import (
+from tests.lcb.lcb_reference import (
     functional_outputs_match,
     stdio_outputs_match,
 )

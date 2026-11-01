@@ -4,7 +4,7 @@ The importer hashes the expected outputs on the host and the grader hashes what 
 candidate produced; the supervisor compares the two lists of hashes. Two outputs
 get the same canonical form exactly when LiveCodeBench's own comparison
 (``lcb_runner/evaluation/testing_util.py``) accepts one for the other. The
-equivalence test in ``tests/benchmarks`` runs the vendored comparison over a corpus.
+equivalence test in ``tests/lcb`` runs the vendored comparison over a corpus.
 
 Stdin mode (``grade_stdio``): the whole output is stripped, split on ``\\n`` and
 each line stripped. Lines are equal when the text is equal or when both split on
