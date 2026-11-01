@@ -21,6 +21,7 @@ from benchmarks.livecodebench.canonical import (
     canonical_value,
     digest,
 )
+from tests.lcb.lcb_reference import functional_outputs_match
 
 SOURCE_DIR = Path(__file__).resolve().parents[2] / "benchmarks" / "livecodebench"
 BUNDLE_FILES = ("canonical.py", "grader.py", "call.py")
@@ -124,6 +125,51 @@ class StdinAndFunctionalTests(GraderCase):
         result = self.run_grader()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.observed(), {"hashes": [None, None, value_hash([2])]})
+
+
+class FunctionalVerdictTests(GraderCase):
+    """Through the grader, a functional result passes exactly when LiveCodeBench's
+    own comparison accepts it: the child hashes the real Python object, before any
+    JSON round trip can turn a tuple into a list or an int key into a string."""
+
+    def verdict(self, returned_source, expected_text):
+        self.make_bundle("functional", ["[0]"], "f")
+        self.write_solution(
+            """
+            class Solution:
+                def f(self, n):
+                    return %s
+            """ % returned_source
+        )
+        result = self.run_grader()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        (observed,) = self.observed()["hashes"]
+        expected_hash = value_hash(json.loads(expected_text))
+        return observed is not None and observed == expected_hash
+
+    def check_matches_reference(self, returned_source, expected_text):
+        prediction = eval(returned_source)
+        reference = functional_outputs_match(prediction, json.loads(expected_text))
+        self.assertEqual(
+            self.verdict(returned_source, expected_text),
+            reference,
+            "%s vs %s" % (returned_source, expected_text),
+        )
+        return reference
+
+    def test_nested_tuple_is_not_a_list(self):
+        self.assertFalse(self.check_matches_reference("[(1, 2)]", "[[1, 2]]"))
+
+    def test_int_dict_key_is_not_a_string_key(self):
+        self.assertFalse(self.check_matches_reference('{1: "a"}', '{"1": "a"}'))
+
+    def test_outermost_tuple_is_a_list(self):
+        self.assertTrue(self.check_matches_reference("(1, 2)", "[1, 2]"))
+
+    def test_plain_results_still_match(self):
+        self.assertTrue(self.check_matches_reference("[[1, 2]]", "[[1, 2]]"))
+        self.assertTrue(self.check_matches_reference('{"a": [1.0, True]}', '{"a": [1, 1]}'))
+        self.assertFalse(self.check_matches_reference("[[2, 1]]", "[[1, 2]]"))
 
 
 class IsolationTests(GraderCase):

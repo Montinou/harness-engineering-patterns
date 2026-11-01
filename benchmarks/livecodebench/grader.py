@@ -133,8 +133,10 @@ def hash_stdin_output(canonical, raw):
 
 
 def hash_functional_output(canonical, raw):
-    value = json.loads(raw.decode("utf-8"))
-    return canonical.digest(canonical.canonical_value(value))
+    """``call.py`` printed the canonical form of the real result; hash it as is."""
+    text = raw.decode("utf-8")
+    json.loads(text)  # refuse anything that is not the JSON call.py writes
+    return canonical.digest(text)
 
 
 def grade(tests, solution, canonical, python=None):

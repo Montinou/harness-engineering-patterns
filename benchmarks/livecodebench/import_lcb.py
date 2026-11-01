@@ -45,6 +45,8 @@ DATASET = "livecodebench/code_generation_lite"
 DATASET_URL = "https://huggingface.co/datasets/%s/resolve/{revision}/{name}" % DATASET
 DEFAULT_LOCK = os.path.join(HERE, "dataset_lock.json")
 DEFAULT_ERRATA = os.path.join(HERE, "errata.json")
+# raw private tests are cached here, never under --out where the graders sit
+DEFAULT_CACHE_ROOT = os.path.join(os.path.expanduser("~"), ".cache", "harness-lcb")
 BUNDLE_SOURCES = ("canonical.py", "grader.py", "call.py")
 
 MAX_DECODED_BYTES = 256 * 1024 * 1024
@@ -476,6 +478,11 @@ def _near_duplicates(descriptions):
     return pairs
 
 
+def _is_inside(path, directory):
+    path, directory = os.path.realpath(path), os.path.realpath(directory)
+    return os.path.commonpath([path, directory]) == directory
+
+
 def run_import(revision, files, out, source_dir=None, cache_dir=None, lock_path=DEFAULT_LOCK,
                errata_path=DEFAULT_ERRATA, max_bundle_bytes=MAX_BUNDLE_BYTES,
                opener=urllib.request.urlopen):
@@ -486,7 +493,11 @@ def run_import(revision, files, out, source_dir=None, cache_dir=None, lock_path=
         if not FILE_RE.match(name):
             raise ValueError("unsupported dataset file name %r" % (name,))
     out = os.path.abspath(out)
-    cache_dir = cache_dir or os.path.join(out, "download-cache")
+    cache_dir = os.path.abspath(cache_dir or os.path.join(DEFAULT_CACHE_ROOT, revision))
+    if _is_inside(cache_dir, out):
+        raise ValueError(
+            "the download cache %s holds the raw private tests and must not be inside "
+            "--out %s" % (cache_dir, out))
     errata = _load_errata(errata_path)
     lock = _read_lock(lock_path)
     paths = [resolve_file(revision, name, lock, lock_path, source_dir, cache_dir, opener)
@@ -519,6 +530,11 @@ def run_import(revision, files, out, source_dir=None, cache_dir=None, lock_path=
                 earlier = statements.get(built["statement_key"])
                 if earlier is not None:
                     raise _Skip("duplicate_statement", duplicate_of=earlier)
+                try:
+                    _write_problem(out, row, built)
+                except UnicodeEncodeError as exc:
+                    # a lone surrogate in the statement cannot be written as UTF-8
+                    raise _Skip("unencodable_text", str(exc)[:200])
             except _Skip as skip:
                 item = {"id": qid[:100], "reason": skip.reason}
                 if skip.detail:
@@ -533,7 +549,6 @@ def run_import(revision, files, out, source_dir=None, cache_dir=None, lock_path=
                 exclusions.append({"id": qid[:100], "reason": "malformed_row",
                                    "detail": str(exc)[:200]})
                 continue
-            _write_problem(out, row, built)
             statements[built["statement_key"]] = built["id"]
             descriptions[built["id"]] = built["description"]
             counts.setdefault(built["platform"], {}).setdefault(built["difficulty"], 0)
@@ -569,7 +584,7 @@ def main(argv=None):
     parser.add_argument("--files", nargs="+", required=True, help="e.g. test5.jsonl test6.jsonl")
     parser.add_argument("--out", required=True)
     parser.add_argument("--source-dir", help="local directory holding the jsonl files")
-    parser.add_argument("--cache-dir", help="download cache (default <out>/download-cache)")
+    parser.add_argument("--cache-dir", help="download cache, outside --out (default ~/.cache/harness-lcb/<revision>)")
     parser.add_argument("--lock-file", default=DEFAULT_LOCK)
     parser.add_argument("--errata-file", default=DEFAULT_ERRATA)
     parser.add_argument("--max-bundle-bytes", type=int, default=MAX_BUNDLE_BYTES)

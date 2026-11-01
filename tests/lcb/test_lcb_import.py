@@ -376,6 +376,16 @@ class ImportTests(ImportTestCase):
         self.assertFalse((self.root / "escape").exists())
         self.assertFalse((self.out / "graders" / "3002").exists())
 
+    def test_lone_surrogate_row_is_excluded_not_fatal(self):
+        bad = stdin_row("abc900_b", title="Lone", content="Statement with \ud800 inside.")
+        good = stdin_row("abc900_a")
+        self.run_import([bad, good])
+        self.assertEqual([e["id"] for e in self.pool()], ["abc900_a"])
+        reasons = {item["id"]: item["reason"] for item in self.report()["exclusions"]}
+        self.assertEqual(reasons, {"abc900_b": "unencodable_text"})
+        self.assertFalse((self.out / "graders" / "abc900_b").exists())
+        self.assertFalse((self.out / "fixtures" / "abc900_b").exists())
+
     def test_report_counts_and_near_duplicates(self):
         statement = " ".join("word%d" % i for i in range(40))
         near = statement + " extra"
@@ -488,6 +498,30 @@ class DownloadTests(ImportTestCase):
         with self.assertRaises(import_lcb.LockMismatch):
             import_lcb.run_import(**options)
         self.assertEqual(json.loads(self.lock.read_text()), lock)
+
+    def test_default_cache_is_outside_out_and_per_revision(self):
+        body = (json.dumps(stdin_row("abc900_a")) + "\n").encode()
+        home = self.root / "cachehome"
+        old_root = import_lcb.DEFAULT_CACHE_ROOT
+        import_lcb.DEFAULT_CACHE_ROOT = str(home)
+        self.addCleanup(setattr, import_lcb, "DEFAULT_CACHE_ROOT", old_root)
+        import_lcb.run_import(
+            revision=REVISION, files=["test6.jsonl"], out=self.out, lock_path=self.lock,
+            errata_path=self.errata, opener=lambda request, timeout=None: FakeResponse(body))
+        self.assertTrue((home / REVISION / "test6.jsonl").is_file())
+        self.assertEqual(
+            [p.name for p in self.out.iterdir() if "cache" in p.name], [])
+
+    def test_cache_dir_inside_out_is_refused(self):
+        body = (json.dumps(stdin_row("abc900_a")) + "\n").encode()
+        for inside in (self.out / "download-cache", self.out, self.out / "a" / ".." / "b"):
+            with self.assertRaises(ValueError, msg=str(inside)):
+                import_lcb.run_import(
+                    revision=REVISION, files=["test6.jsonl"], out=self.out,
+                    cache_dir=inside, lock_path=self.lock, errata_path=self.errata,
+                    opener=lambda request, timeout=None: FakeResponse(body))
+        self.assertFalse((self.out / "download-cache").exists())
+        self.assertFalse(self.lock.exists())
 
     def test_revision_and_file_names_are_validated(self):
         for revision in ("main", "../x", REVISION[:-1]):
