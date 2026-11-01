@@ -45,6 +45,7 @@ CHECK_TYPES = frozenset({
     "file_exists", "file_equals", "command", "oracle",
 })
 ENVIRONMENT_MODES = ("trusted_local", "sandboxed", "os_sandboxed")
+MAX_PARALLELISM = 16
 # Modes whose backend isolates candidate code (a container or an OS sandbox).
 ISOLATED_MODES = ("sandboxed", "os_sandboxed")
 EXPERIMENT_MODES = ("exploratory", "confirmatory")
@@ -227,6 +228,9 @@ class EnvironmentConfig:
     srt: SrtConfig | None = None
     egress_allow: tuple[str, ...] = ()
     solver_read_paths: tuple[str, ...] = ()
+    # Trials of one grid that run at once (worker threads). Outside the plan and policy hashes: how fast a
+    # run goes never changes what it measures.
+    parallelism: int = 1
 
     def __post_init__(self) -> None:
         if self.mode not in ENVIRONMENT_MODES:
@@ -252,6 +256,7 @@ class EnvironmentConfig:
             trusted_solver_acknowledged=_flag("trusted_solver_acknowledged", self.trusted_solver_acknowledged),
             egress_allow=egress,
             solver_read_paths=read_paths,
+            parallelism=require_int("parallelism", self.parallelism, minimum=1, maximum=MAX_PARALLELISM),
         )
 
 

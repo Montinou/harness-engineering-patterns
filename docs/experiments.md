@@ -157,6 +157,13 @@ is rebuilt through the API):
 - have candidates whose execution configuration differs from the baseline's, and at most one finalist
   (`finalists`, if given, must be 1).
 
+`environment.parallelism` (integer 1 to 16, default 1) runs the trials of a grid in a thread pool. Workers execute
+and grade; every database write stays on the main thread, as each trial finishes; before any decision the grid's
+records are put back in the fixed (task, repetition, variant) order, so the result does not depend on completion
+order. A trial whose run raises is recorded as that trial's unevaluated `EXECUTION_ERROR` and the others continue.
+The setting is outside the plan and policy hashes, so changing it never invalidates a rerun. The executor and the
+backend are shared by the workers, so an executor must be safe to call from several threads.
+
 ## Supported independent checks
 
 Each result has a `status`: `passed` and `failed` are verdicts about the solver; `error` means the evaluator could
