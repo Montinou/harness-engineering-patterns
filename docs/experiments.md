@@ -6,7 +6,8 @@
 **Validation record:** [docs/verification.md](verification.md). **Audit map:** [docs/audit-remediation.md](audit-remediation.md).
 **Decisions:** [ADR 0001 evaluator trust boundary](adr/0001-evaluator-trust-boundary.md),
 [0002 statistical protocol](adr/0002-statistical-protocol.md),
-[0003 persistence and migration](adr/0003-persistence-and-migration.md).
+[0003 persistence and migration](adr/0003-persistence-and-migration.md),
+[0005 hash-only observation and the OS sandbox](adr/0005-hash-only-observation-and-os-sandbox.md).
 
 Branch: feat/experimental-evaluation-layer. Independent of Durable Harness or Vercel.
 
@@ -147,7 +148,8 @@ is rebuilt through the API):
   (a hash does not prove semantic independence, so this stays a human review);
 - give every validation and regression task `controls` (one positive case that must pass and at least one negative
   case that must fail), and state `runs_candidate_code` explicitly on every task;
-- use `environment.mode: sandboxed` and at least one `oracle` check for any task with `runs_candidate_code: true`,
+- use `environment.mode: sandboxed` or `os_sandboxed` and at least one `oracle` check for any task with
+  `runs_candidate_code: true`,
   and set `trusted_solver_acknowledged: true` to use `trusted_local` at all;
 - run `{python}` in `command` and `oracle` checks with `-I` as `argv[1]`;
 - declare a known `statistics.profile` and meet it: `repetitions`, `min_independent_units`,
@@ -157,12 +159,87 @@ is rebuilt through the API):
 - have candidates whose execution configuration differs from the baseline's, and at most one finalist
   (`finalists`, if given, must be 1).
 
+### `os_sandboxed` environment fields
+
+`environment.mode: os_sandboxed` runs every process under Anthropic's Sandbox Runtime (`srt`; see the backend table
+below and [ADR 0005](adr/0005-hash-only-observation-and-os-sandbox.md)). It adds three fields, which are an error in
+any other mode:
+
+- `environment.srt` (required): `{"node": <absolute path>, "cli": <absolute path to the runtime's dist/cli.js>,
+  "version": "<pinned version>"}`. The backend runs `<node> <cli> --settings <file> -- <argv>`; the probe fails with
+  `BackendUnavailable` when the runtime reports another version. The version and the SHA-256 of `cli.js` are
+  recorded in the experiment's provenance.
+- `environment.egress_allow` (default `[]`): hosts the **solver** may reach, as `host` or `host:port`. Graders and
+  controls always run with an empty allowlist, even when this is set. With an entry, the self-test also checks that
+  the allowed host answers through the proxy.
+- `environment.solver_read_paths` (default `[]`): extra paths the solver may read, for example the Claude Code
+  install. They are readable, never writable.
+
+~~~json
+"environment": {
+  "mode": "os_sandboxed",
+  "srt": {"node": "/usr/local/bin/node", "cli": "/opt/srt/node_modules/@anthropic-ai/sandbox-runtime/dist/cli.js",
+          "version": "0.0.81"},
+  "egress_allow": ["ai-gateway.vercel.sh:443"],
+  "solver_read_paths": ["/opt/claude-code"],
+  "parallelism": 6
+}
+~~~
+
+The paths above are placeholders. The solver's `PATH` puts the runner interpreter's directory first, so an agent
+tests with the interpreter the grader uses.
+
+The opt-in integration tests (`tests/integration/test_srt_backend.py`) run the real runtime only with
+`HARNESS_SRT_TESTS=1`; without it they are skipped, and with it an unavailable runtime fails the suite instead of
+skipping. They read `HARNESS_SRT_NODE` (absolute path of a real `node`, default the first `node` on `PATH`) and
+`HARNESS_SRT_CLI` (path of `dist/cli.js`, with a default under `~/.local/share/harness-tools`), and optionally
+`HARNESS_SRT_VERSION` (default `0.0.81`) and `HARNESS_SRT_EGRESS` (default `ai-gateway.vercel.sh:443`). The
+`isolation` CI job installs bubblewrap, `socat`, ripgrep and runtime 0.0.81 and runs them on Linux.
+
+### `parallelism`
+
 `environment.parallelism` (integer 1 to 16, default 1) runs the trials of a grid in a thread pool. Workers execute
 and grade; every database write stays on the main thread, as each trial finishes; before any decision the grid's
 records are put back in the fixed (task, repetition, variant) order, so the result does not depend on completion
 order. A trial whose run raises is recorded as that trial's unevaluated `EXECUTION_ERROR` and the others continue.
 The setting is outside the plan and policy hashes, so changing it never invalidates a rerun. The executor and the
-backend are shared by the workers, so an executor must be safe to call from several threads.
+backend are shared by the workers, so an executor must be safe to call from several threads. With 1 the trials run
+inline on the main thread, as before. It is valid in every `environment.mode`; it is not a limit on API spend, so a
+run that talks to a real model should size it with the provider's rate limits in mind.
+
+### The Claude Code adapter placeholder
+
+A `command` executor `argv` may contain `{claude_code_agent}`, which expands to the path of
+`harness_workbench/experiments/claude_code_agent.py`. The executor mounts that one file read-only into the solver,
+the way `{demo_agent}` mounts `demo_agent.py`, and runs it as `{python} -I {claude_code_agent} --harness
+{harness_json} --task {task_json} --workspace {workspace} --result {result_json} --model <model> --max-budget-usd
+<usd> --claude <path> --claude-version <version>`. The adapter is a self-contained stdlib script that imports
+nothing from the package. It applies the seven supported components (`system_prompt`, `guardrails`,
+`memory_config`, `tools`, `subagents`, `skills`, `scripts`) to headless Claude Code and does not support `plugins`:
+a manifest that uses it lists only those seven in `executor.supports`, and the runner refuses a candidate that
+changes a component the executor does not support.
+
+- **Refused unless the backend isolates.** The adapter runs Claude Code with `--permission-mode
+  bypassPermissions`. The executor therefore checks the backend before creating anything: it must satisfy
+  `SRT_REQUIRED` or `SANDBOX_REQUIRED`, and a backend whose capabilities are unknown (an unprobed sandbox) is
+  refused too. `trusted_local` never runs it; the trial ends as a non-retryable `execution_error` that names the
+  reason.
+- **Pinned CLI.** The adapter runs `<claude> --version` and refuses to run when the reported version is not
+  `--claude-version`; the pinned version for the real-model experiment is Claude Code 2.1.316. It records the
+  binary's path and SHA-256 and the version in the result's `outputs.details`.
+- **Outcome mapping.** Any result Claude Code reports, including `error_max_turns`, `error_max_budget_usd` and
+  `error_during_execution`, is written to the result file with exit 0, so the grader scores whatever `solution.py`
+  exists. Failures that are not the candidate's (an unknown tool, a malformed component, a CLI that does not start
+  or has the wrong version, an authentication or payment error, no parsable result) write no result file and exit
+  3, which the executor records as an `execution_error` instead of scoring it.
+- **Credentials.** The adapter reads `ANTHROPIC_API_KEY` (and optionally `ANTHROPIC_BASE_URL`, default
+  `https://ai-gateway.vercel.sh`, and `HTTPS_PROXY`) from the environment the executor passes through
+  `solver_env_passthrough`, and redacts the key from the result file. Under `sandboxed` that value appears on the `docker run` command line; under
+  `os_sandboxed` it does not.
+
+The opt-in reach test (`tests/integration/test_claude_code_reach.py`, `HARNESS_REAL_MODEL_TESTS=1`, network and a
+key) checks that a marker placed in each supported component reaches the model. Its further environment variables
+are listed in the test file's docstring.
 
 ## Supported independent checks
 
@@ -212,6 +289,7 @@ task's controls run through the real evaluator, and a control that misbehaves in
 |---|---|---|---|
 | `LocalBackend` (`trusted_local`) | `environment.mode: trusted_local` | Wall-clock timeout; a cap on captured output per stream (`resource_limit`); a minimal allowlisted environment with a fresh `HOME`, `TMPDIR` and cache directory per trial; no `PYTHON*` inheritance; the child runs in its own session and the whole process group is killed on a timeout and after the main process exits. | Isolation of any kind. A descendant that starts a new session (for example `setsid()`) survives the group kill; `run` stops waiting for its pipes after a fixed bound and returns. Declares `NO_GUARANTEES`. |
 | `DockerBackend` (`sandboxed`) | `environment.mode: sandboxed` | A capability self-test before any run (isolated filesystem, network denied, unprivileged user, process containment, no Docker socket, read-only bundle); `--network none`, user 65534, all capabilities dropped, `no-new-privileges`, read-only root, memory and pid limits; the container is removed on a timeout or output overflow; the writable tree is opened for the container user before the run and reclaimed for the host after it. If Docker or a capability is missing it raises `BackendUnavailable` **before executing**, and it never falls back to the host. | Verified only where Docker is available: its integration tests pass in CI (the `isolation` job fails if any is skipped) and were not run on the author's machine. A secret declared in `solver_env_passthrough` appears on the `docker run` command line. The sandbox is only as strong as the daemon and the image. |
+| `SrtBackend` (`os_sandboxed`) | `environment.mode: os_sandboxed` | A capability self-test before any run (an unreadable canary outside the mounts, a refused write outside the writable mounts, a refused non-allowed host, an allowed host answering through the proxy when `egress_allow` is set, a read-only bundle) and a runtime version check; the filesystem is deny-by-default for reads (`/Users`, `/home`, `/tmp`, `/private/tmp`, `/var/folders`, `/Volumes`, every other top-level tree that is not a root-owned system root, and every ancestor of every mount) with the mounts, the interpreter prefix and `solver_read_paths` re-allowed, and writable only in the writable mounts; network limited to `egress_allow` for the solver and always empty for graders and controls; each process runs in its own session with a timeout, an output cap and a process-group kill; the per-process settings file is created `0600` in a private directory outside every mount and removed afterwards. Reports `network_allowlist`; `SRT_REQUIRED` asks for an isolated filesystem, process containment, a read-only bundle and denied-or-allowlisted network. If the runtime, `node`, a Linux tool (`bwrap`, `socat`, `rg`) or a property is missing it raises `BackendUnavailable` and never falls back to the host. | The boundary is the same user as the host, weaker than a container: `unprivileged_user` and `no_docker_socket` are reported false, with no capability drop or memory and pid limits from the backend. Root-owned system roots (`/usr`, `/etc`, `/bin`, `/sbin`, `/lib`, `/System`, `/dev`, `/proc`, `/sys`, `/Library`) and `/opt/homebrew` stay readable in full, so the read-deny covers user-created locations, not the whole host. The Linux (bubblewrap) path is verified only in the `isolation` CI job; the macOS (Seatbelt) path has run on the author's machine. |
 
 Both modes give the solver and the grader an allowlisted environment (`PATH`, `LANG`, `LC_ALL`, `LC_CTYPE` and
 `TZ` copied from the parent; a fresh `HOME`, `TMPDIR` and `XDG_CACHE_HOME`; `PYTHONNOUSERSITE`,
@@ -424,8 +502,8 @@ that no held-out suite has confirmed.
 - Keep code revisions, models, dependencies, external resources and tool policies pinned. Uncontrolled network
   resources can make results incomparable.
 - Full outputs are persisted: keep secrets and sensitive personal data out of benchmark fixtures.
-- Trials run sequentially, even when the older Improver runs with `mode=parallel` (which means candidate
-  comparisons against a common base). Multi-host persistence, a live dashboard and distributed workers are not
+- Trials run one at a time unless `environment.parallelism` is above 1 (see above). The older Improver's
+  `mode=parallel` is unrelated: it means candidate comparisons against a common base. Multi-host persistence, a live dashboard and distributed workers are not
   included; the offline HTML report is read-only.
 - The mock evaluator measures structural fitness, not task correctness. The Anthropic judge is not an oracle.
 
@@ -437,8 +515,11 @@ that no held-out suite has confirmed.
   descendants that start new sessions.
 - An `oracle` verdict can be forged by candidate code that runs in the grader process and writes the observation
   late (ADR 0001). `command` checks are weaker still.
-- The sandbox backend and the install/portability checks have only run where their prerequisites exist. Docker
+- The sandbox backends and the install/portability checks have only run where their prerequisites exist. Docker
   integration tests and the wheel/editable script run in CI (`isolation`, `portability`), not on the author's machine.
+  The `os_sandboxed` backend has run on macOS (opt-in `HARNESS_SRT_TESTS=1`); its Linux path runs only in CI.
+- `os_sandboxed` is a same-user boundary and its read-deny leaves root-owned system roots and `/opt/homebrew`
+  readable ([ADR 0005](adr/0005-hash-only-observation-and-os-sandbox.md)).
 - The exposure registry is local; hashes do not prove semantic independence; one finalist and one primary metric
   only; several regression groups and plans above the profile floors are not calibrated; the regression
   tolerance is 0.10.
@@ -450,7 +531,8 @@ that no held-out suite has confirmed.
 
 `.github/workflows/harness-tests.yml` defines five jobs: `core` (unit and regression suite on Python 3.10, 3.12 and
 3.13 with an editable install), `no-install` (the suite from a clean checkout on 3.12 with the package not
-installed), `isolation` (the Docker sandbox tests and the sandboxed demo, failing on any skip), `portability`
+installed), `isolation` (the Docker sandbox tests, the `os_sandboxed` backend tests on Linux with bubblewrap and the sandboxed
+demo, failing on any skip), `portability`
 (wheel and editable installs from a foreign cwd with no `python` alias, failing on any skip and on a runner that
 ships `/usr/bin/python`) and `smoke` (the confirmatory demo must end `eligible`, the local demo
 `exploratory_only`). This describes the workflow file. **No run of it exists yet for this work**; results are
@@ -464,8 +546,9 @@ recorded in [verification.md](verification.md) when they do.
 - `experiments/stats.py`, `experiments/profiles.py`, `experiments/simulate.py`: independent-unit statistics, the
   decision function, published profiles, the Monte Carlo simulator.
 - `experiments/grader.py`, `experiments/checks.py`: the frozen bundle, validated snapshot, supervisor-side checks.
-- `experiments/backends.py`: `LocalBackend`, `DockerBackend`, capabilities, the minimal environment.
+- `experiments/backends.py`: `LocalBackend`, `DockerBackend`, `SrtBackend`, capabilities, the minimal environment.
 - `experiments/command.py`: the command executor and the public trial request.
+- `experiments/claude_code_agent.py`: the standalone Claude Code adapter behind `{claude_code_agent}`.
 - `experiments/contracts.py`, `experiments/status.py`, `experiments/validation.py`: typed records, statuses,
   strict numbers and JSON.
 - `experiments/provenance.py`: provenance record, drift detection, adapter capabilities.
