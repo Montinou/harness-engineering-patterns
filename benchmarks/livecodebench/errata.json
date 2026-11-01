@@ -1,0 +1,50 @@
+{
+  "source_url": "https://github.com/LiveCodeBench/LiveCodeBench/blob/main/ERRATA.md",
+  "fetched_from": "https://raw.githubusercontent.com/LiveCodeBench/LiveCodeBench/main/ERRATA.md",
+  "fetched_on": "2026-11-01",
+  "note": "Ids as printed in ERRATA.md. AtCoder ids look like abc311_c; LeetCode entries are title slugs, so the importer matches an entry against a row's question_id and against the slug of its question_title.",
+  "categories": {
+    "multiple_solutions_accepted": [
+      "abc311_c",
+      "abc326_d",
+      "abc327_b",
+      "abc333_e",
+      "abc343_e",
+      "abc362_c",
+      "find-words-containing-character",
+      "find-the-peaks",
+      "generate-binary-strings-without-adjacent-zeros",
+      "arc185_c",
+      "abc343_a"
+    ],
+    "interactive": [
+      "abc337_e",
+      "abc355_e"
+    ],
+    "erroneous_tests": [
+      "abc350_c",
+      "apply-operations-to-make-string-empty",
+      "most-frequent-ids",
+      "arc189_a"
+    ]
+  },
+  "ids": [
+    "abc311_c",
+    "abc326_d",
+    "abc327_b",
+    "abc333_e",
+    "abc343_e",
+    "abc362_c",
+    "find-words-containing-character",
+    "find-the-peaks",
+    "generate-binary-strings-without-adjacent-zeros",
+    "arc185_c",
+    "abc343_a",
+    "abc337_e",
+    "abc355_e",
+    "abc350_c",
+    "apply-operations-to-make-string-empty",
+    "most-frequent-ids",
+    "arc189_a"
+  ]
+}
