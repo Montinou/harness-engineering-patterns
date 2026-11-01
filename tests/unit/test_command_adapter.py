@@ -64,13 +64,14 @@ class RecordingBackend:
         self.mounts: Mounts | None = None
         self.env: dict[str, str] = {}
         self.cwd: Path | None = None
+        self.network: bool | None = None
 
     def capabilities(self):
         return self.inner.capabilities()
 
-    def run(self, argv, *, cwd, env, limits, mounts):
-        self.argv, self.mounts, self.env, self.cwd = list(argv), mounts, dict(env), cwd
-        return self.inner.run(argv, cwd=cwd, env=env, limits=limits, mounts=mounts)
+    def run(self, argv, *, cwd, env, limits, mounts, network=False):
+        self.argv, self.mounts, self.env, self.cwd, self.network = list(argv), mounts, dict(env), cwd, network
+        return self.inner.run(argv, cwd=cwd, env=env, limits=limits, mounts=mounts, network=network)
 
 
 class AdapterCase(unittest.TestCase):

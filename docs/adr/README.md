@@ -11,6 +11,7 @@ Consequences, Limits and an "Enforced by" list of the tests that fail if the dec
 | [0002](0002-statistical-protocol.md) | Estimand, independent units, pre-registered grid, the `binary_v1` profile and its numbers, margins, Bonferroni, zero-variance policy, single finalist, and the dated calibration deviation | Accepted, with deviation |
 | [0003](0003-persistence-and-migration.md) | SQLite as the source of truth, JSON as exported views, `MigrationRequired`, no base renumbering, promotion by decision id, sequential Improve under a gate | Accepted |
 | [0004](0004-single-branch-delivery-and-versioning.md) | Commits directly on `feat/experimental-evaluation-layer`, package stays 0.2.0, manifest schema v2, results schema v2, implementation order of spec section 10 | Accepted |
+| [0005](0005-hash-only-observation-and-os-sandbox.md) | Hash-only observation makes a forged `observed.json` useless; `os_sandboxed` (Anthropic Sandbox Runtime) as a second isolating backend, weaker than a container, with stated read-deny residuals. The real-model spec calls it "ADR 0003" | Accepted |
 
 Related documents: [statistical validation](../statistical-validation.md), [audit remediation](../audit-remediation.md),
 [experiments](../experiments.md).

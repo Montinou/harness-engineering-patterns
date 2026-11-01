@@ -81,8 +81,15 @@ def _backend_record(backend: Any) -> dict[str, Any]:
         except Exception:
             digest = None
     image = getattr(backend, "image", None)
-    return {"name": str(getattr(backend, "name", type(backend).__name__)), "capabilities": capabilities,
-            "image": image if isinstance(image, str) else None, "image_digest": digest}
+    record = {"name": str(getattr(backend, "name", type(backend).__name__)), "capabilities": capabilities,
+              "image": image if isinstance(image, str) else None, "image_digest": digest}
+    describe = getattr(backend, "describe", None)  # SrtBackend: runtime version and cli SHA-256
+    if callable(describe):
+        try:
+            record["srt"] = describe()
+        except Exception:
+            record["srt"] = None
+    return record
 
 
 def adapter_supports(executor: Any) -> frozenset[str]:

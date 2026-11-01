@@ -14,6 +14,7 @@ import shutil
 import statistics
 import tempfile
 import uuid
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -443,24 +444,89 @@ class _Runner:
         self.attempts: list[TrialRecord] = []  # every attempt, in execution order
         self.final: list[TrialRecord] = []  # the last attempt of each trial: what decisions use
 
-    def trial(self, variant: Variant, task: TaskSpec, repetition: int) -> None:
+    def attempts_of(self, variant: Variant, task: TaskSpec, repetition: int, *,
+                    pooled: bool = True) -> list[TrialRecord]:
+        """Run one trial, retries included, and return its attempts in order.
+
+        Pooled (a pool thread runs it) it never touches the database, and an exception that escapes
+        ``run_trial`` is that trial's failure (an unevaluated ``EXECUTION_ERROR`` attempt, not retried): it
+        must not stop the other trials. Inline (``pooled=False``, the main thread at parallelism 1) it is
+        today's behavior: each attempt is written as it finishes and an escaping exception aborts the run.
+        """
+        records: list[TrialRecord] = []
         for attempt in range(1, self.spec.statistics.max_attempts + 1):
-            record = run_trial(
-                self.spec, variant, task, repetition=repetition, attempt=attempt, executor=self.executor,
-                backend=self.backend, limits=self.limits, experiment_id=self.experiment_id,
-                implementation_hash=self.implementation_hash,
-            )
-            self.db.record_trial(self.experiment_id, record)
-            self.attempts.append(record)
+            try:
+                record = run_trial(
+                    self.spec, variant, task, repetition=repetition, attempt=attempt, executor=self.executor,
+                    backend=self.backend, limits=self.limits, experiment_id=self.experiment_id,
+                    implementation_hash=self.implementation_hash,
+                )
+            except Exception as exc:  # BaseException (an interrupt) still propagates
+                if not pooled:
+                    raise
+                records.append(_crashed_trial(self.spec, variant, task, repetition, attempt,
+                                              self.implementation_hash, exc))
+                break
+            records.append(record)
+            if not pooled:
+                self._write(record)
             if not _retry(record):
                 break
-        self.final.append(record)
+        return records
+
+    def _write(self, record: TrialRecord) -> None:
+        self.db.record_trial(self.experiment_id, record)
+        self.attempts.append(record)
+
+    def persist(self, records: list[TrialRecord]) -> None:
+        """Main thread only: write each attempt of one finished pooled trial, in order, and keep it in the lists."""
+        for record in records:
+            self._write(record)
+        self.final.append(records[-1])
 
     def grid(self, variants: list[Variant], tasks: tuple[TaskSpec, ...]) -> None:
-        for task in tasks:
-            for repetition in range(self.spec.repetitions):
-                for variant in _alternate(variants, repetition):
-                    self.trial(variant, task, repetition)
+        """Run every (task, repetition, variant) trial, ``environment.parallelism`` at a time.
+
+        Workers execute and grade; the main thread alone writes to the database, as each trial finishes.
+        Afterwards this grid's records are put back in the fixed (task, repetition, variant) order, so
+        decisions never depend on completion order. With one worker the trials run inline, in that order.
+        """
+        order = [(task, repetition, variant) for task in tasks for repetition in range(self.spec.repetitions)
+                 for variant in _alternate(variants, repetition)]
+        first_attempt, first_final = len(self.attempts), len(self.final)
+        workers = min(self.spec.environment.parallelism, max(1, len(order)))
+        if workers == 1:
+            for task, repetition, variant in order:
+                self.final.append(self.attempts_of(variant, task, repetition, pooled=False)[-1])
+            return
+        position = {(task.id, repetition, variant.id): index for index, (task, repetition, variant) in enumerate(order)}
+        futures: list[Future] = []
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="trial") as pool:
+            try:
+                futures = [pool.submit(self.attempts_of, variant, task, repetition)
+                           for task, repetition, variant in order]
+                for future in as_completed(futures):
+                    self.persist(future.result())
+            except BaseException:
+                for future in futures:
+                    future.cancel()  # trials not started yet are dropped; running ones finish, then it re-raises
+                raise
+        key = lambda record: (position[(record.task_id, record.repetition, record.variant_id)], record.attempt)  # noqa: E731
+        self.final[first_final:] = sorted(self.final[first_final:], key=key)
+        self.attempts[first_attempt:] = sorted(self.attempts[first_attempt:], key=key)
+
+
+def _crashed_trial(spec: ExperimentSpec, variant: Variant, task: TaskSpec, repetition: int, attempt: int,
+                   implementation_hash: str, exc: Exception) -> TrialRecord:
+    """The record of a trial whose ``run_trial`` raised: an execution error that was never evaluated."""
+    trial_id = uuid.uuid4().hex
+    execution = _failed_execution(trial_id, ExecutionStatus.EXECUTION_ERROR,
+                                  f"trial raised {type(exc).__name__}: {exc}")
+    return TrialRecord(
+        trial_id, variant.id, task.id, task.split.value if task.split else "unsplit", task.family,
+        repetition, spec.seed + repetition, attempt, execution,
+        _not_evaluated(trial_id, task, ExecutionStatus.EXECUTION_ERROR), implementation_hash,
+    )
 
 
 def _guard_eligible(decision: ExperimentDecision, *, spec: ExperimentSpec, selection: FrozenSelection | None,

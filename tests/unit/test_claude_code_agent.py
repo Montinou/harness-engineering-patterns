@@ -17,7 +17,7 @@ import unittest
 from pathlib import Path
 
 from harness_workbench.experiments import claude_code_agent as agent
-from harness_workbench.experiments.backends import LocalBackend, ProcessLimits
+from harness_workbench.experiments.backends import SRT_REQUIRED, LocalBackend, ProcessLimits
 from harness_workbench.experiments.command import CLAUDE_CODE_AGENT, CommandHarnessExecutor
 from harness_workbench.experiments.contracts import PublicTrialRequest
 from harness_workbench.experiments.status import ExecutionStatus
@@ -455,12 +455,14 @@ class PlaceholderTests(unittest.TestCase):
             self.env: dict[str, str] = {}
 
         def capabilities(self):
-            return self.inner.capabilities()
+            # The adapter is only allowed on an isolating backend; this double runs a no-op locally, so it
+            # declares the isolation the real backends would provide.
+            return SRT_REQUIRED
 
-        def run(self, argv, *, cwd, env, limits, mounts):
+        def run(self, argv, *, cwd, env, limits, mounts, network=False):
             self.argv, self.mounts, self.env = list(argv), mounts, dict(env)
             return self.inner.run([sys.executable, "-c", "pass"], cwd=cwd, env=env, limits=limits,
-                                  mounts=mounts)
+                                  mounts=mounts, network=network)
 
     def request(self) -> PublicTrialRequest:
         return PublicTrialRequest(
@@ -495,6 +497,18 @@ class PlaceholderTests(unittest.TestCase):
         self.assertEqual(backend.env["HARNESS_TIMEOUT_SECONDS"], "123.0")
 
 
+class IsolatedLocalBackend(LocalBackend):
+    """Runs locally but declares isolation, so the command executor admits the Claude Code adapter.
+
+    These tests exercise the adapter's exit-code mapping through the executor, not isolation; the refusal on a
+    non-isolating backend is tested in tests/unit/test_srt_backend_argv.py and real isolation in the opt-in
+    integration tests.
+    """
+
+    def capabilities(self):
+        return SRT_REQUIRED
+
+
 class AdapterExitThroughExecutorTests(AdapterCase):
     """The real adapter run by the real command executor: exit 3 must not become a scored trial."""
 
@@ -519,7 +533,7 @@ class AdapterExitThroughExecutorTests(AdapterCase):
         os.environ.update(env)
         try:
             return executor.execute_trial(
-                self.request(), workspace=self.base / "trial" / "workspace", backend=LocalBackend(),
+                self.request(), workspace=self.base / "trial" / "workspace", backend=IsolatedLocalBackend(),
                 limits=ProcessLimits(timeout_seconds=60.0))
         finally:
             for name, value in old.items():
