@@ -205,7 +205,14 @@ def _system_prompt_text(parts: dict[str, Any], plugin: Path) -> str:
         sections.append("## Tool guidance\n" + "\n".join(f"- {name}: {guidance.strip()}" for name, guidance in guided))
     if parts["scripts"]:
         lines = [f"- {name} ({language}): {plugin / 'scripts' / name}" for name, language, _ in parts["scripts"]]
-        sections.append("## Scripts\nThese scripts are available; run them with the Bash tool.\n" + "\n".join(lines))
+        enabled = {name for name, _ in parts["tools"]}
+        if "Bash" in enabled:
+            how = "run them with the Bash tool"
+        elif "Read" in enabled:
+            how = "read them with the Read tool (they cannot be run)"
+        else:
+            how = "no enabled tool can run or open them"
+        sections.append(f"## Scripts\nThese scripts are available; {how}.\n" + "\n".join(lines))
     return "\n\n".join(sections)
 
 
@@ -424,7 +431,22 @@ def _read_json(path: str, what: str) -> Any:
         raise AdapterError(f"cannot read {what} file: {type(exc).__name__}") from None
 
 
+def _scrub(value: Any, secret: str) -> Any:
+    """``value`` with every occurrence of ``secret`` replaced, in strings and in object keys."""
+    if isinstance(value, str):
+        return value.replace(secret, "[redacted]")
+    if isinstance(value, list):
+        return [_scrub(item, secret) for item in value]
+    if isinstance(value, dict):
+        return {_scrub(key, secret): _scrub(item, secret) for key, item in value.items()}
+    return value
+
+
 def _write_result(path: Path, result: dict[str, Any]) -> None:
+    key = os.environ.get("ANTHROPIC_API_KEY")
+    if key:
+        # The model may have echoed the key (a harness can tell it to run `env`); the grader never needs it.
+        result = _scrub(result, key)
     text = json.dumps(result, allow_nan=False, ensure_ascii=False)
     staging = path.with_name(path.name + ".tmp")
     staging.write_text(text, encoding="utf-8")

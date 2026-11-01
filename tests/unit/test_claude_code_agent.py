@@ -161,6 +161,24 @@ class InvocationTests(AdapterCase):
         self.assertIn("be brief", record["stdin"])
         self.assertEqual(record["cwd"], str(self.base / "workspace"))
 
+    def test_scripts_wording_follows_the_enabled_tools(self) -> None:
+        def prompt() -> str:
+            self.assertEqual(self.run_adapter().returncode, 0)
+            argv = self.record()["argv"]
+            return argv[argv.index("--append-system-prompt") + 1]
+
+        self.assertIn("run them with the Bash tool", prompt())
+        self.harness["tools"] = [{"name": "Read", "guidance": ""}]
+        text = prompt()
+        self.assertNotIn("Bash", text)
+        self.assertIn("read them with the Read tool", text)
+        self.assertIn("lint.sh", text)
+        self.harness["tools"] = [{"name": "Grep", "guidance": ""}]
+        text = prompt()
+        self.assertNotIn("Bash", text)
+        self.assertNotIn("run them", text)
+        self.assertIn("lint.sh", text)
+
     def test_no_skills_or_subagents_means_no_skill_or_agent_tool(self) -> None:
         self.harness["skills"], self.harness["subagents"], self.harness["scripts"] = [], [], []
         self.assertEqual(self.run_adapter().returncode, 0)
@@ -349,6 +367,18 @@ class ResultMappingTests(AdapterCase):
         self.assertEqual(details["claude_version"], PINNED)
         self.assertEqual(details["claude_path"], str(self.claude))
         self.assertEqual(details["claude_sha256"], hashlib.sha256(self.claude.read_bytes()).hexdigest())
+
+    def test_api_key_is_redacted_from_the_result_file(self) -> None:
+        leaked = dict(OK_JSON, result=f"ANTHROPIC_API_KEY={KEY_CANARY}\nand again {KEY_CANARY}",
+                      modelUsage={MODEL: {"costUSD": 0.0026}, KEY_CANARY: {}})
+        self.set_behavior(stdout=json.dumps(leaked))
+        proc = self.run_adapter()
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        text = self.result.read_text()
+        self.assertNotIn(KEY_CANARY, text)
+        self.assertNotIn(KEY_CANARY, proc.stdout + proc.stderr)
+        data = json.loads(text)
+        self.assertEqual(data["outputs"]["answer"], "ANTHROPIC_API_KEY=[redacted]\nand again [redacted]")
 
     def test_error_subtypes_write_result(self) -> None:
         for subtype in ("error_max_turns", "error_max_budget_usd", "error_during_execution"):
