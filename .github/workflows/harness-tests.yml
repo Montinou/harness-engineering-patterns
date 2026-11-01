@@ -80,6 +80,27 @@ jobs:
             echo "NOT RUN: sandbox tests were skipped (Docker unavailable or the capability self-test failed)" >&2
             exit 1
           fi
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install the Anthropic Sandbox Runtime and its Linux tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap socat ripgrep
+          # ubuntu-latest (24.04) restricts unprivileged user namespaces through AppArmor, and bubblewrap needs them.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          npm install --prefix "$RUNNER_TEMP/srt" @anthropic-ai/sandbox-runtime@0.0.81
+      - name: Run the srt backend tests (a skip fails the job; no API key is used)
+        env:
+          HARNESS_SRT_TESTS: "1"
+        run: |
+          export HARNESS_SRT_NODE="$(command -v node)"
+          export HARNESS_SRT_CLI="$RUNNER_TEMP/srt/node_modules/@anthropic-ai/sandbox-runtime/dist/cli.js"
+          python -m unittest tests.integration.test_srt_backend -v 2>&1 | tee "$RUNNER_TEMP/srt-tests.log"
+          if grep -qi "skipped" "$RUNNER_TEMP/srt-tests.log"; then
+            echo "NOT RUN: srt tests were skipped (runtime unavailable or the capability self-test failed)" >&2
+            exit 1
+          fi
       - name: Sandboxed demo experiment is eligible
         run: |
           root="$RUNNER_TEMP/isolation-root"
