@@ -155,7 +155,8 @@ solver's workspace from a frozen grader bundle.
 
 **Documentation:** [docs/experiments.md](docs/experiments.md) (contracts, protocol, limits),
 [docs/audit-remediation.md](docs/audit-remediation.md) (A1-A12 map, changed test expectations, what was not run),
-[docs/statistical-validation.md](docs/statistical-validation.md) and [docs/adr/](docs/adr/README.md).
+[docs/statistical-validation.md](docs/statistical-validation.md), [docs/adr/](docs/adr/README.md), and
+[docs/real-model-experiment.md](docs/real-model-experiment.md) (status of the first real-model experiment).
 
 This system records seeds and environment fingerprints, but does not guarantee
 LLM determinism. Demo and simulation results are synthetic, not benchmark claims.
