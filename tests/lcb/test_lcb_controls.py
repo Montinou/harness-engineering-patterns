@@ -15,6 +15,7 @@ import textwrap
 import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from benchmarks.livecodebench import make_controls
 from harness_workbench.experiments.backends import LocalBackend
@@ -323,6 +324,40 @@ class BuildControlsTests(ControlsTestCase):
         self.assertEqual(sorted(self.calls()), ["Double Them", "Sum Two"])
         self.assertEqual(report["pool_size"], 3)
         self.assertEqual(report["attempted"], 2)
+        # a partial report says so, and what limited it
+        self.assertIs(report["complete"], False)
+        self.assertEqual(report["limit"], 2)
+        self.assertIs(self.control_report()["complete"], False)
+
+    def test_a_whole_pool_run_is_complete(self):
+        self.three_problems()
+        self.set_solutions({"Sum Two": SUM_SOLUTION, "Double Them": DOUBLE_SOLUTION,
+                            "Sum Again": SUM_SOLUTION})
+        report = self.build()
+        self.assertIs(report["complete"], True)
+        self.assertIsNone(report["limit"])
+        # a limit that covers the pool is still the whole pool
+        self.assertIs(self.build(limit=10)["complete"], True)
+
+    def test_an_interrupted_run_writes_an_incomplete_report(self):
+        self.three_problems()
+        self.set_solutions({"Sum Two": SUM_SOLUTION, "Double Them": DOUBLE_SOLUTION,
+                            "Sum Again": SUM_SOLUTION})
+        original = make_controls.ControlsBuilder.process
+        seen = []
+
+        def interrupt_on_the_second(builder, entry):
+            seen.append(entry["id"])
+            if len(seen) == 2:
+                raise KeyboardInterrupt
+            return original(builder, entry)
+
+        with mock.patch.object(make_controls.ControlsBuilder, "process", interrupt_on_the_second):
+            with self.assertRaises(KeyboardInterrupt):
+                self.build()
+        report = self.control_report()  # written in the finally block
+        self.assertIs(report["complete"], False)
+        self.assertLess(report["attempted"], report["pool_size"])
 
     def test_parallel_run_gives_the_same_report(self):
         self.three_problems()

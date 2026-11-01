@@ -55,7 +55,7 @@ def write_controls_report(pool_dir, kept):
     """The part of make_controls' controls_report.json that the manifest tool reads."""
     kept = sorted(kept)
     (Path(pool_dir) / "controls_report.json").write_text(
-        json.dumps({"kept": kept, "kept_count": len(kept), "excluded": []}), encoding="utf-8")
+        json.dumps({"kept": kept, "kept_count": len(kept), "excluded": [], "complete": True}), encoding="utf-8")
 
 
 class PoolTestCase(unittest.TestCase):
@@ -191,6 +191,17 @@ class AssignmentTests(PoolTestCase):
         self.assertEqual(done.returncode, 2)
         self.assertIn("controls_report.json", done.stderr)
 
+    def test_assign_refuses_a_partial_controls_report(self):
+        entries = synthetic_pool(BIG_POOL)
+        self.write_pool(entries)
+        for extra in ({"complete": False, "limit": 5}, {}):
+            report = {"kept": [entry["id"] for entry in entries], "excluded": [], **extra}
+            (self.pool_dir / "controls_report.json").write_text(json.dumps(report), encoding="utf-8")
+            with self.assertRaises(make_manifests.ManifestToolError) as caught:
+                make_manifests.assign(self.pool_dir, seed=SEED)
+            self.assertIn("complete", str(caught.exception))
+            self.assertFalse((self.pool_dir / "splits.json").exists())
+
     def test_assign_refuses_a_malformed_controls_report(self):
         self.write_pool(synthetic_pool(BIG_POOL), kept=False)
         (self.pool_dir / "controls_report.json").write_text(json.dumps({"kept": "all"}), encoding="utf-8")
@@ -322,6 +333,32 @@ class PilotManifestTests(importer_tests.ImportTestCase):
         self.assertEqual(argv[:3], ["{python}", "-I", "{claude_code_agent}"])
         self.assertEqual(argv, make_controls.default_adapter_argv(
             "anthropic/claude-haiku-5.5", CLAUDE, "2.1.316", "0.50"))
+
+    def test_effective_trial_timeout_is_the_executors_900(self):
+        # the loader defaults environment.limits.timeout_seconds to 300 and core takes the minimum, so a
+        # manifest that leaves limits out would stop every trial at 300 s whatever the executor says
+        from harness_workbench.experiments.backends import ProcessLimits
+        from harness_workbench.experiments.command import CommandHarnessExecutor
+        from harness_workbench.experiments.core import _effective_limits
+        self.import_three()
+        self.write_splits(["abc900_a"])
+        self.build()
+        spec = ExperimentSpec.load(self.manifest)
+        self.assertGreaterEqual(spec.environment.limits.timeout_seconds, 900)
+        executor = CommandHarnessExecutor.from_config(spec.executor, spec.environment)
+        effective = _effective_limits(ProcessLimits.from_config(spec.environment.limits), executor)
+        self.assertEqual(effective.timeout_seconds, 900)
+        self.assertEqual(executor.limits.timeout_seconds, 900)
+        # an explicit higher limit is kept; a lower one cannot be honoured and is refused
+        higher = copy.deepcopy(ENVIRONMENT)
+        higher["limits"] = {"timeout_seconds": 1200}
+        self.build(environment=higher)
+        self.assertEqual(ExperimentSpec.load(self.manifest).environment.limits.timeout_seconds, 1200)
+        lower = copy.deepcopy(ENVIRONMENT)
+        lower["limits"] = {"timeout_seconds": 300}
+        with self.assertRaises(make_manifests.ManifestToolError) as caught:
+            self.build(environment=lower)
+        self.assertIn("timeout_seconds", str(caught.exception))
 
     def test_task_checks_are_oracle_json_equal_with_expected_hashes(self):
         self.import_three()

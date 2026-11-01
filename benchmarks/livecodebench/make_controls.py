@@ -456,12 +456,12 @@ def build_controls(pool, *, model, environment, backend=None, adapter_argv=None,
                 log("excluded %s: %s" % (outcome["id"], outcome["reason"]))
     finally:
         pool_executor.shutdown(wait=True, cancel_futures=True)
-        report = _report(builder, pool, model, harness_obj, harness_source, entries, selected, outcomes)
+        report = _report(builder, pool, model, harness_obj, harness_source, entries, selected, outcomes, limit)
         _write_json(os.path.join(pool, "controls_report.json"), report)
     return report
 
 
-def _report(builder, pool, model, harness, harness_source, entries, selected, outcomes):
+def _report(builder, pool, model, harness, harness_source, entries, selected, outcomes, limit=None):
     ordered = [outcomes[entry["id"]] for entry in selected if entry["id"] in outcomes]
     kept = [item["id"] for item in ordered if item["kept"]]
     excluded = []
@@ -480,6 +480,10 @@ def _report(builder, pool, model, harness, harness_source, entries, selected, ou
         "harness": {"source": harness_source, "execution_config_hash": harness.execution_config_hash()},
         "pool_size": len(entries),
         "attempted": len(ordered),
+        # False for a --limit run or one stopped before every problem was decided: ``kept`` is then a subset of
+        # the pool and make_manifests refuses to draw splits from it
+        "complete": len(ordered) == len(entries),
+        "limit": limit,
         "kept_count": len(kept),
         "excluded_count": len(excluded),
         "kept": kept,

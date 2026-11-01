@@ -29,7 +29,8 @@ cat > $POOL.environment.json <<'JSON'
           "version": "0.0.81"},
   "egress_allow": ["ai-gateway.vercel.sh:443"],
   "solver_read_paths": ["/Users/agustinmontoya/.local/share/claude/versions/2.1.316"],
-  "parallelism": 6
+  "parallelism": 6,
+  "limits": {"timeout_seconds": 900}
 }
 JSON
 ```
@@ -58,7 +59,9 @@ python benchmarks/livecodebench/make_controls.py --pool $POOL --model anthropic/
 
 Runs on the whole pool, before the splits. Keeps a problem only when its generated solution passes the real
 grader and both negatives (empty, examples only) fail. Read `controls_report.json`: its `kept` ids are the pool
-(spec section 8); excluded problems are listed with a reason and never reach a split.
+(spec section 8); excluded problems are listed with a reason and never reach a split. A `--limit` run, or one
+stopped before every problem was decided, writes `"complete": false` (and the `limit`); `make_manifests.py`
+refuses such a report, so rerun on the whole pool.
 
 ## 3. Assign the splits
 
@@ -96,8 +99,10 @@ repetitions, and the Claude Code adapter as the command executor:
 ```
 
 `executor.supports` is exactly the adapter's seven components (never `plugins`), `executor.timeout_seconds` is
-900 (the tool refuses a timeout that does not exceed the adapter's 30 s stop margin), and
-`statistics.timeout_is_task_failure` is true. Each task's `oracle` check carries the expected hashes; the grader
+900 (the tool refuses a timeout that does not exceed the adapter's 30 s stop margin), the environment's
+`limits.timeout_seconds` is at least that (the run stops a trial at the smaller of the two and the loader
+defaults the environment's to 300 s: the tool sets it to the executor's when you leave it out and refuses a
+lower one), and `statistics.timeout_is_task_failure` is true. Each task's `oracle` check carries the expected hashes; the grader
 only observes hashes and the supervisor compares them, so neither the expected outputs nor the hashes are in
 `graders/` or in the solver's workspace.
 

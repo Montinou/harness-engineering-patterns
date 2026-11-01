@@ -26,7 +26,7 @@ from typing import Any
 from harness_workbench.core.executor import BehavioralReport, Task, TraceStep
 from harness_workbench.core.harness import ALL_COMPONENTS, Harness
 from harness_workbench.experiments.backends import (
-    SANDBOX_REQUIRED, SRT_REQUIRED, BackendUnavailable, ExecutionBackend, LocalBackend, Mounts, ProcessLimits,
+    SRT_REQUIRED, BackendUnavailable, ExecutionBackend, LocalBackend, Mounts, ProcessLimits,
     ProcessOutcome, minimal_env,
 )
 from harness_workbench.experiments.contracts import ExecutionResult, Measurement, PublicTrialRequest
@@ -131,19 +131,23 @@ def _read_result(path: Path, max_bytes: int) -> Any:
 
 
 def _isolation_problem(backend: ExecutionBackend) -> str | None:
-    """Why ``backend`` may not run the Claude Code adapter, or ``None`` when it isolates.
+    """Why ``backend`` may not run the Claude Code adapter, or ``None`` when it may.
 
     The adapter passes ``--permission-mode bypassPermissions``, so it must only ever run where the filesystem
-    and network are confined: a backend whose capabilities satisfy ``SRT_REQUIRED`` or ``SANDBOX_REQUIRED``.
+    and network are confined (``SRT_REQUIRED``), and it must reach its model, so the egress allowlist must not
+    be empty: ``sandboxed`` (Docker, ``--network none``) isolates but the agent could never get an answer.
     A backend that cannot say (an unprobed sandbox) is refused too.
     """
     try:
         capabilities = backend.capabilities()
     except BackendUnavailable as exc:
         return f"backend capabilities are unknown: {exc}"
-    if capabilities.satisfies(SRT_REQUIRED) or capabilities.satisfies(SANDBOX_REQUIRED):
-        return None
-    return f"backend {getattr(backend, 'name', type(backend).__name__)!r} does not isolate"
+    name = getattr(backend, "name", type(backend).__name__)
+    if not capabilities.satisfies(SRT_REQUIRED):
+        return f"backend {name!r} does not isolate"
+    if capabilities.network_denied:
+        return f"backend {name!r} has no egress allowlist entries, so the agent could not reach its model"
+    return None
 
 
 def _fresh_dir(path: Path) -> None:
@@ -200,7 +204,7 @@ class CommandHarnessExecutor:
                 return ExecutionResult(
                     status=ExecutionStatus.EXECUTION_ERROR, outputs={}, retryable=False,
                     error=(f"{CLAUDE_CODE_AGENT_PLACEHOLDER} runs Claude Code with bypassPermissions and "
-                           f"requires an isolating backend (os_sandboxed or sandboxed); {problem}"),
+                           f"requires an isolating os_sandboxed backend with a non-empty egress allowlist; {problem}"),
                     trial_id=request.trial_id, exit_code=None, stdout_tail="", stderr_tail="",
                     latency_ms=Measurement.unknown(), artifact_hash=None, tokens=Measurement.unknown(),
                     adapter_latency_ms=Measurement.unknown(), returned_model=None), {}

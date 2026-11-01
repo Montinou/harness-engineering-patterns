@@ -719,12 +719,23 @@ class SrtBackend:
 
     # -- settings ---------------------------------------------------------------
 
+    def _srt_helper_paths(self) -> list[str]:
+        """The srt package's ``vendor/seccomp`` directory (``<package>/dist/cli.js`` -> ``<package>/vendor``).
+
+        On Linux srt runs its ``apply-seccomp`` helper inside the bubblewrap namespace, so the denied trees
+        must not hide it when srt is installed under one of them. Read-only, and re-allowed on every
+        platform; a package without the directory adds nothing.
+        """
+        seccomp = Path(_real(self.cli)).parent.parent / "vendor" / "seccomp"
+        return [str(seccomp)] if seccomp.is_dir() else []
+
     def settings_for(self, mounts: Mounts, network: bool) -> dict:
         """The srt settings for one process. Pure: no filesystem writes, no srt."""
         read_only = [_real(path) for path in mounts.read_only]
         writable = [_real(path) for path in mounts.writable]
         interpreter = [_real(sys.base_prefix), _real(sys.prefix)]
-        allow = _unique([*read_only, *writable, *interpreter, *(_real(path) for path in self.read_paths)])
+        allow = _unique([*read_only, *writable, *interpreter, *(_real(path) for path in self.read_paths),
+                         *self._srt_helper_paths()])
         # Every ancestor of every mount (up to "/", minus the roots in _SRT_NEVER_DENY) is unreadable: siblings
         # such as other problems' graders, the pool, the manifest or other trials stay hidden wherever the
         # experiment lives, not only under the fixed roots. The mounts and read paths are re-allowed below.

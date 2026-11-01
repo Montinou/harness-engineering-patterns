@@ -137,6 +137,11 @@ def load_kept_ids(pool):
     kept = report.get("kept") if isinstance(report, dict) else None
     if not isinstance(kept, list) or not all(isinstance(qid, str) for qid in kept):
         raise ManifestToolError("%s has no 'kept' list of problem ids" % path)
+    if report.get("complete") is not True:
+        raise ManifestToolError(
+            "%s is not a complete report (complete=%r, limit=%r): it came from a --limit or interrupted run and "
+            "lists only some of the pool; rerun make_controls.py on the whole pool" % (
+                path, report.get("complete"), report.get("limit")))
     return set(kept)
 
 
@@ -281,8 +286,10 @@ def _development_ids(pool, splits_path):
     return ids, splits.get("seed", DEFAULT_SEED)
 
 
-def _pilot_environment(raw):
-    """The manifest's environment block: ``raw`` checked, with the Gateway credentials readable by the solver."""
+def _pilot_environment(raw, timeout_seconds):
+    """The manifest's environment block: ``raw`` checked, with the Gateway credentials readable by the solver
+    and ``limits.timeout_seconds`` at least the executor's. The run stops a trial at the smaller of the two, and
+    the loader defaults the environment's to 300 s, so a block that leaves it out would cut every trial short."""
     if not isinstance(raw, dict):
         raise ManifestToolError("--environment must be a JSON object")
     try:
@@ -299,6 +306,12 @@ def _pilot_environment(raw):
         if name not in passthrough:
             passthrough.append(name)
     block["solver_env_passthrough"] = passthrough
+    if config.limits.timeout_seconds < timeout_seconds and "timeout_seconds" in (raw.get("limits") or {}):
+        raise ManifestToolError(
+            "environment.limits.timeout_seconds (%g) is below the executor timeout_seconds (%g): trials would "
+            "stop at the smaller one; raise it or leave it out" % (config.limits.timeout_seconds, timeout_seconds))
+    if config.limits.timeout_seconds < timeout_seconds:
+        block["limits"] = dict(raw.get("limits") or {}, timeout_seconds=timeout_seconds)
     return block
 
 
@@ -320,7 +333,7 @@ def build_pilot(pool, out, *, environment, claude, claude_version=DEFAULT_CLAUDE
     if not claude:
         raise ManifestToolError("the adapter needs the pinned Claude Code executable (--claude)")
     validate_executor(timeout_seconds, SUPPORTED)
-    block = _pilot_environment(environment)
+    block = _pilot_environment(environment, timeout_seconds)
     base_harness, pilot_harness = _check_candidate(baseline), _check_candidate(candidate)
     if base_harness.execution_config_hash() == pilot_harness.execution_config_hash():
         raise ManifestToolError("the candidate must differ from the baseline in its executable components")
