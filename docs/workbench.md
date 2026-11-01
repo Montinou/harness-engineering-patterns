@@ -5,7 +5,7 @@
 **Package version:** 0.2.0 in pyproject.toml and harness_workbench/__init__.py.
 **Related:** [audit remediation map](audit-remediation.md), [ADRs](adr/README.md), [experiments](experiments.md).
 
-This branch extends the original Workbench with opt-in controlled experiments.
+The experimentation layer extends the original Workbench with opt-in controlled experiments.
 It does not rename the package, train model weights, or depend on Durable Harness.
 The original core and the new experimentation layer are distinct.
 

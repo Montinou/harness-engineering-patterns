@@ -1,9 +1,8 @@
 # Harness Engineering Patterns
 
-> **Current branch: feat/experimental-evaluation-layer (documentation aligned October 24, 2026).**
-> This branch adds experimental evaluation to the existing Workbench **package
-> version 0.2.0**; it does not bump the published package version to 0.3.0.
-> This is a separate implementation from feat/harness-experimentation-layer.
+> **Merged into `main` on October 30, 2026 (PR #1).** The experimental evaluation
+> layer is part of the Workbench **package version 0.2.0**; the package version
+> was not bumped to 0.3.0.
 > It carries the remediation of an external audit (findings A1-A12): see the
 > [audit remediation map](docs/audit-remediation.md), the
 > [architecture decision records](docs/adr/README.md),
@@ -164,9 +163,9 @@ There is no Durable Harness dependency or automatic merge/promotion.
 
 ## Status and boundaries
 
-This branch retains Workbench **package 0.2.0** and adds an experimental runner,
+`main` carries Workbench **package 0.2.0** with an experimental runner,
 an optional independent acceptance gate for Improve, adapter support, statistics
-and HTML/JSON reports. These are feature-branch capabilities, not proof of a
+and HTML/JSON reports. These are experimental capabilities, not proof of a
 stable v0.3 release.
 
 Remaining limitations, stated plainly:
@@ -176,7 +175,7 @@ Remaining limitations, stated plainly:
   agent is a deterministic script.
 - `trusted_local` is not a sandbox and lets the solver read host files. Process groups do not contain
   descendants that start new sessions. The Docker sandbox and the install/portability checks have only run
-  where Docker and `setuptools` exist; they were not run on the author's machine.
+  where Docker and `setuptools` exist: in CI, not on the author's machine.
 - An `oracle` verdict can be forged by candidate code that runs in the grader process and writes the observation
   late ([ADR 0001](docs/adr/0001-evaluator-trust-boundary.md)); this is not fixed in code.
 - The holdout exposure registry is local to one library. Hashes do not prove semantic independence. The
@@ -186,11 +185,10 @@ Remaining limitations, stated plainly:
   configuration itself. SQLite coordinates processes on one host only; there is no distributed storage and no
   automatic resume.
 
-Local verification, recorded at c7a923e (the commit that added the CI workflow; only documentation changed
-after it): the full suite passed on Python 3.10.19, 3.12.12 and 3.13.14 (619 tests, 8 skipped: the Docker
-sandbox tests and the opt-in portability script, which were not run locally). No GitHub
-Actions run exists for this work yet; the 36-test, Python 3.12 run in
-[the verification record](docs/verification.md) belongs to an older commit.
+CI: GitHub Actions run 41036918917 on `7775390`, the last commit of PR #1, passed all seven jobs (`core` on
+3.10, 3.12 and 3.13, `no-install`, `isolation` with the Docker sandbox tests, `portability`, `smoke`); `main`
+requires all seven. Locally the Docker sandbox tests and the portability script are skipped. Details in
+[the verification record](docs/verification.md).
 
 ## Historical sources
 
