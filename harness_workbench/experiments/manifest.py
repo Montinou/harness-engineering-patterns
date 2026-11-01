@@ -35,7 +35,7 @@ from harness_workbench.experiments.validation import (
 __all__ = [
     "ALL_COMPONENTS", "SCHEMA_VERSION", "BudgetPolicy", "Case", "CHECK_TYPES", "ControlCase", "Controls",
     "EnvironmentConfig", "ExecutorConfig", "ExperimentSpec", "ManifestError", "ProcessLimitsConfig",
-    "Split", "StatisticsPolicy", "TaskSpec", "Variant", "digest_path", "migrate_manifest",
+    "Split", "SrtConfig", "StatisticsPolicy", "TaskSpec", "Variant", "digest_path", "migrate_manifest",
 ]
 
 SCHEMA_VERSION = 2
@@ -44,7 +44,9 @@ CHECK_TYPES = frozenset({
     "exact", "contains", "not_contains", "regex", "json_equal",
     "file_exists", "file_equals", "command", "oracle",
 })
-ENVIRONMENT_MODES = ("trusted_local", "sandboxed")
+ENVIRONMENT_MODES = ("trusted_local", "sandboxed", "os_sandboxed")
+# Modes whose backend isolates candidate code (a container or an OS sandbox).
+ISOLATED_MODES = ("sandboxed", "os_sandboxed")
 EXPERIMENT_MODES = ("exploratory", "confirmatory")
 _BARE_PYTHON = frozenset({"python", "python3"})
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -201,6 +203,18 @@ class ProcessLimitsConfig:
 
 
 @dataclass(frozen=True)
+class SrtConfig:
+    """Where Anthropic Sandbox Runtime lives: ``node <cli> --settings <file> -- <argv>``. Absolute paths."""
+    node: str
+    cli: str
+    version: str
+
+    def __post_init__(self) -> None:
+        _set(self, node=_text("srt.node", self.node), cli=_text("srt.cli", self.cli),
+             version=_text("srt.version", self.version))
+
+
+@dataclass(frozen=True)
 class EnvironmentConfig:
     mode: str
     image: str = "python:3.12-slim"
@@ -208,6 +222,11 @@ class EnvironmentConfig:
     solver_env_passthrough: tuple[str, ...] = ()
     limits: ProcessLimitsConfig = field(default_factory=ProcessLimitsConfig)
     trusted_solver_acknowledged: bool = False
+    # os_sandboxed only: the runtime, the hosts the solver (never a grader) may reach, and extra read-only
+    # paths the solver needs (the Claude Code install).
+    srt: SrtConfig | None = None
+    egress_allow: tuple[str, ...] = ()
+    solver_read_paths: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.mode not in ENVIRONMENT_MODES:
@@ -218,12 +237,21 @@ class EnvironmentConfig:
                 raise ValidationError(f"solver_env_passthrough entry {name!r} is not an environment variable name")
         if not isinstance(self.limits, ProcessLimitsConfig):
             raise ValidationError("limits must be a ProcessLimitsConfig")
+        egress = _string_list("egress_allow", self.egress_allow)
+        read_paths = _string_list("solver_read_paths", self.solver_read_paths)
+        if self.mode == "os_sandboxed":
+            if not isinstance(self.srt, SrtConfig):
+                raise ValidationError("environment.srt {node, cli, version} is required when mode is os_sandboxed")
+        elif self.srt is not None or egress or read_paths:
+            raise ValidationError("environment.srt, egress_allow and solver_read_paths apply only to mode os_sandboxed")
         _set(
             self,
             image=_text("image", self.image),
             image_python=_text("image_python", self.image_python),
             solver_env_passthrough=passthrough,
             trusted_solver_acknowledged=_flag("trusted_solver_acknowledged", self.trusted_solver_acknowledged),
+            egress_allow=egress,
+            solver_read_paths=read_paths,
         )
 
 
@@ -538,9 +566,14 @@ def _policy(cls: type, raw: Any, key: str, **extra: Any) -> Any:
 def _environment(raw: Any) -> EnvironmentConfig:
     if not isinstance(raw, dict) or "mode" not in raw:
         raise ManifestError(
-            "environment.mode is required in schema v2 ('trusted_local' is opt-in, 'sandboxed' is isolated)")
+            "environment.mode is required in schema v2 ('trusted_local' is opt-in, 'sandboxed' and 'os_sandboxed' are isolated)")
     values = dict(raw)
     values["limits"] = _policy(ProcessLimitsConfig, values.get("limits"), "environment.limits")
+    if values.get("srt") is not None:
+        values["srt"] = _policy(SrtConfig, values["srt"], "environment.srt")
+    for name in ("egress_allow", "solver_read_paths"):
+        if name in values:
+            values[name] = _string_list(f"environment.{name}", values[name])
     if "solver_env_passthrough" in values:
         values["solver_env_passthrough"] = _string_list(
             "environment.solver_env_passthrough", values["solver_env_passthrough"])
@@ -806,10 +839,10 @@ class ExperimentSpec:
             if task.runs_candidate_code is None:
                 problems.append(f"task {task.id} must state runs_candidate_code (true or false)")
             elif task.runs_candidate_code:
-                if self.environment.mode != "sandboxed":
+                if self.environment.mode not in ISOLATED_MODES:
                     problems.append(
                         f"task {task.id} runs candidate code, which requires environment.mode sandboxed "
-                        f"(got {self.environment.mode})")
+                        f"or os_sandboxed (got {self.environment.mode})")
                 if not any(check.get("type") == "oracle" for check in task.checks):
                     problems.append(f"task {task.id} runs candidate code and needs at least one oracle check")
             for index, check in enumerate(task.checks):

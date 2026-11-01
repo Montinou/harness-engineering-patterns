@@ -26,7 +26,8 @@ from typing import Any
 from harness_workbench.core.executor import BehavioralReport, Task, TraceStep
 from harness_workbench.core.harness import ALL_COMPONENTS, Harness
 from harness_workbench.experiments.backends import (
-    ExecutionBackend, LocalBackend, Mounts, ProcessLimits, ProcessOutcome, minimal_env,
+    SANDBOX_REQUIRED, SRT_REQUIRED, BackendUnavailable, ExecutionBackend, LocalBackend, Mounts, ProcessLimits,
+    ProcessOutcome, minimal_env,
 )
 from harness_workbench.experiments.contracts import ExecutionResult, Measurement, PublicTrialRequest
 from harness_workbench.experiments.core import RunContext
@@ -129,6 +130,22 @@ def _read_result(path: Path, max_bytes: int) -> Any:
     return data
 
 
+def _isolation_problem(backend: ExecutionBackend) -> str | None:
+    """Why ``backend`` may not run the Claude Code adapter, or ``None`` when it isolates.
+
+    The adapter passes ``--permission-mode bypassPermissions``, so it must only ever run where the filesystem
+    and network are confined: a backend whose capabilities satisfy ``SRT_REQUIRED`` or ``SANDBOX_REQUIRED``.
+    A backend that cannot say (an unprobed sandbox) is refused too.
+    """
+    try:
+        capabilities = backend.capabilities()
+    except BackendUnavailable as exc:
+        return f"backend capabilities are unknown: {exc}"
+    if capabilities.satisfies(SRT_REQUIRED) or capabilities.satisfies(SANDBOX_REQUIRED):
+        return None
+    return f"backend {getattr(backend, 'name', type(backend).__name__)!r} does not isolate"
+
+
 def _fresh_dir(path: Path) -> None:
     if path.is_symlink() or path.is_file():
         path.unlink()
@@ -176,6 +193,17 @@ class CommandHarnessExecutor:
     def _run(self, request: PublicTrialRequest, workspace: Path, backend: ExecutionBackend,
              limits: ProcessLimits) -> tuple[ExecutionResult, dict[str, Any]]:
         workspace = Path(workspace)
+        if any(CLAUDE_CODE_AGENT_PLACEHOLDER in argument for argument in self.argv):
+            problem = _isolation_problem(backend)
+            if problem is not None:
+                # Refused before anything is created or started: bypassPermissions never runs on the host.
+                return ExecutionResult(
+                    status=ExecutionStatus.EXECUTION_ERROR, outputs={}, retryable=False,
+                    error=(f"{CLAUDE_CODE_AGENT_PLACEHOLDER} runs Claude Code with bypassPermissions and "
+                           f"requires an isolating backend (os_sandboxed or sandboxed); {problem}"),
+                    trial_id=request.trial_id, exit_code=None, stdout_tail="", stderr_tail="",
+                    latency_ms=Measurement.unknown(), artifact_hash=None, tokens=Measurement.unknown(),
+                    adapter_latency_ms=Measurement.unknown(), returned_model=None), {}
         parent = workspace.parent
         control, home, tmp = parent / "control", parent / "home", parent / "tmp"
         workspace.mkdir(parents=True, exist_ok=True)
@@ -220,7 +248,9 @@ class CommandHarnessExecutor:
         uses_claude_code_agent = any(CLAUDE_CODE_AGENT_PLACEHOLDER in argument for argument in self.argv)
         mounts = Mounts(read_only=(DEMO_AGENT, CLAUDE_CODE_AGENT) if uses_claude_code_agent else (DEMO_AGENT,),
                         writable=(workspace, control, home, tmp))
-        outcome = backend.run(args, cwd=workspace, env=env, limits=limits, mounts=mounts)
+        # Only the solver may reach the network (the backend's egress allowlist); graders and controls
+        # run through the backend without ``network``.
+        outcome = backend.run(args, cwd=workspace, env=env, limits=limits, mounts=mounts, network=True)
         return self._result(request, outcome, result_file, limits, nonzero_exit_is_error=uses_claude_code_agent)
 
     @staticmethod

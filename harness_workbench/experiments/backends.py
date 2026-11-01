@@ -12,8 +12,11 @@ and returns within the timeout plus a small fixed bound, abandoning the pipes.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
+import shutil
 import signal
 import select
 import stat
@@ -33,7 +36,8 @@ from .status import ExecutionStatus
 __all__ = [
     "BackendCapabilities", "BackendUnavailable", "DockerBackend", "ExecutionBackend",
     "GRADER_FORBIDDEN_PASSTHROUGH", "LocalBackend", "Mounts", "NO_GUARANTEES", "ProcessLimits",
-    "ProcessOutcome", "SANDBOX_REQUIRED", "build_backend", "grader_env", "minimal_env", "require_backend",
+    "ProcessOutcome", "SANDBOX_REQUIRED", "SRT_REQUIRED", "SrtBackend", "build_backend", "grader_env",
+    "minimal_env", "require_backend",
 ]
 
 _READ_CHUNK = 65536
@@ -73,6 +77,9 @@ class BackendCapabilities:
     process_containment: bool
     no_docker_socket: bool
     read_only_bundle: bool
+    # True when egress is limited to an allowlist (an empty one included); network_denied then says
+    # whether that allowlist is empty.
+    network_allowlist: bool = False
 
     def missing(self, required: "BackendCapabilities") -> list[str]:
         return [f.name for f in fields(self) if getattr(required, f.name) and not getattr(self, f.name)]
@@ -83,6 +90,10 @@ class BackendCapabilities:
 
 SANDBOX_REQUIRED = BackendCapabilities(True, True, True, True, True, True)
 NO_GUARANTEES = BackendCapabilities(False, False, False, False, False, False)
+# What the OS sandbox must provide: an isolated filesystem, process containment, a read-only bundle and
+# egress that is denied or limited to an allowlist. unprivileged_user and no_docker_socket are recorded, not
+# required (same uid; no Docker involved).
+SRT_REQUIRED = BackendCapabilities(True, False, False, True, False, True, True)
 
 
 @dataclass(frozen=True)
@@ -110,7 +121,7 @@ class ExecutionBackend(Protocol):
     def capabilities(self) -> BackendCapabilities: ...
 
     def run(self, argv: list[str], *, cwd: Path, env: dict[str, str],
-            limits: ProcessLimits, mounts: Mounts) -> ProcessOutcome: ...
+            limits: ProcessLimits, mounts: Mounts, network: bool = False) -> ProcessOutcome: ...
 
 
 def minimal_env(*, home: Path, tmp: Path, passthrough: Sequence[str] = ()) -> dict[str, str]:
@@ -193,7 +204,8 @@ class LocalBackend:
         return NO_GUARANTEES
 
     def run(self, argv: list[str], *, cwd: Path, env: dict[str, str],
-            limits: ProcessLimits, mounts: Mounts) -> ProcessOutcome:
+            limits: ProcessLimits, mounts: Mounts, network: bool = False) -> ProcessOutcome:
+        # ``network`` is accepted for the common protocol; trusted local execution has no network control.
         started = time.perf_counter()
 
         def elapsed_ms() -> float:
@@ -475,7 +487,8 @@ class DockerBackend:
     # -- execution --------------------------------------------------------------
 
     def run(self, argv: list[str], *, cwd: Path, env: dict[str, str],
-            limits: ProcessLimits, mounts: Mounts) -> ProcessOutcome:
+            limits: ProcessLimits, mounts: Mounts, network: bool = False) -> ProcessOutcome:
+        # ``network`` is ignored: every container runs with --network none.
         if not self._probed:
             raise BackendUnavailable("sandbox backend used before a successful probe()")
         try:
@@ -539,6 +552,337 @@ class DockerBackend:
         return ok
 
 
+# --- Anthropic Sandbox Runtime ------------------------------------------------------------------
+
+_SRT_FAIL = "HARNESS_SRT_FAIL"
+_SRT_OK = "HARNESS_SRT_OK"
+_SRT_VERSION_TIMEOUT_SECONDS = 30.0
+_SRT_SELF_TEST_TIMEOUT_SECONDS = 120.0
+# Trees whose contents the sandboxed process must not read unless a mount or read path re-allows them.
+_SRT_DENY_READ = ("/Users", "/home", "/private/tmp", "/tmp", "/var/folders", "/Volumes")
+# Roots never denied whole, because the sandboxed process needs something in them.
+# Root-owned system directories (RESIDUAL: not plausible out-tree locations, nothing a user or the importer
+# creates lives there): "/usr", "/etc", ... stay readable in full.
+_SRT_SYSTEM_ROOTS = ("/", "/etc", "/usr", "/bin", "/sbin", "/lib", "/lib64", "/System", "/dev", "/proc", "/sys")
+# Roots that hold a mix: the interpreter's prefix (the Homebrew prefix in /opt on macOS, its libraries and
+# certificates), runtime state (/run), the resolver and certificates (/private/etc). They are not denied
+# whole; each child is denied unless it is an ancestor-or-equal of a path the sandbox is allowed to read.
+# A child that is itself needed (/opt/homebrew) stays readable in full: that residual is root-owned install
+# space, not an out-tree location. /Library is a system root (RESIDUAL): kept readable whole.
+_SRT_PARTIAL_ROOTS = ("/private", "/opt", "/run")
+_SRT_KEEP_CHILDREN = ("/private/etc",)
+_SRT_NEVER_DENY = (*_SRT_SYSTEM_ROOTS, "/Library", *_SRT_PARTIAL_ROOTS)
+_SRT_LINUX_TOOLS = ("bwrap", "socat", "rg")
+_SRT_SHORT_TMP = "/tmp"
+_ENV_BIN = "/usr/bin/env"
+
+# Runs inside the sandbox: argv = ro dir, rw dir, canary file, outside file, allowed URL ("" for none).
+# Every property is printed by name; the OK marker is required, so a run that never executed this script
+# cannot pass. Positive controls (read the bundle, write the workspace) keep a sandbox that blocks
+# everything from passing as "isolated".
+_SRT_SELF_TEST_SCRIPT = f"""
+import os, sys, urllib.error, urllib.request
+ro, rw, canary, outside, allowed = sys.argv[1:6]
+failed = []
+def reaches(url):
+    class Stop(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *args, **kwargs):
+            return None
+    try:
+        urllib.request.build_opener(Stop).open(url, timeout=20)
+        return True
+    except urllib.error.HTTPError:
+        return True  # the origin answered; a proxy refusal surfaces as URLError (tunnel failed)
+    except Exception:
+        return False
+try:
+    if open(os.path.join(ro, "marker.txt")).read() != "bundle":
+        failed.append("bundle_unreadable")
+except OSError:
+    failed.append("bundle_unreadable")
+try:
+    with open(os.path.join(rw, "probe.txt"), "w") as handle:
+        handle.write("ok")
+except OSError:
+    failed.append("workspace_unwritable")
+try:
+    open(canary).read()
+    failed.append("canary_readable")
+except OSError:
+    pass
+for target, name in ((outside, "write_outside"), (os.path.join(ro, "probe.txt"), "bundle_writable")):
+    try:
+        open(target, "w").close()
+        failed.append(name)
+    except OSError:
+        pass
+if reaches("https://example.com/"):
+    failed.append("disallowed_host_reachable")
+if allowed and not reaches(allowed):
+    failed.append("allowed_host_unreachable")
+for name in failed:
+    print("{_SRT_FAIL} " + name)
+if not failed:
+    print("{_SRT_OK}")
+sys.exit(1 if failed else 0)
+"""
+
+
+def _root_names() -> list[str]:
+    try:
+        return sorted(os.listdir(os.sep))
+    except OSError as exc:
+        # Fail closed: an unreadable "/" would silently drop every top-level denial.
+        raise BackendUnavailable(f"cannot list the root directory to build the srt denials: {exc}") from exc
+
+
+def _child_names(root: str) -> list[str]:
+    if not os.path.isdir(root):
+        return []
+    try:
+        return sorted(os.listdir(root))
+    except OSError as exc:
+        raise BackendUnavailable(f"cannot list {root} to build the srt denials: {exc}") from exc
+
+
+def _needed(path: str, allowed: Sequence[str]) -> bool:
+    """True when ``path`` is an ancestor-or-equal of a path the sandbox may read."""
+    return any(item == path or item.startswith(path.rstrip(os.sep) + os.sep) for item in allowed)
+
+
+def _top_level_denials(allowed: Sequence[str] = ()) -> list[str]:
+    """Top-level trees the sandboxed process must not read, by real path (the system-root residual aside).
+
+    The importer's out tree (pool, manifest, other problems' graders, cache) can live anywhere, with no
+    ancestor shared with a mount (``/srv/out`` next to an experiment under ``/data``; ``/var/tmp/out`` on
+    macOS, real path ``/private/var/tmp/out``; ``/opt/out``, ``/run/out``). Every top-level entry of ``/``
+    is denied, except:
+
+    * root-owned system directories (``_SRT_SYSTEM_ROOTS``, ``/Library``): RESIDUAL, readable in full. They
+      are not plausible out-tree locations and the runtime needs them;
+    * ``_SRT_PARTIAL_ROOTS`` (``/private``, ``/opt``, ``/run``): not denied whole; each child is denied unless
+      it is an ancestor-or-equal of ``allowed`` (the mounts, the interpreter prefix, the read paths) or in
+      ``_SRT_KEEP_CHILDREN``. What stays readable (``/opt/homebrew`` in full) is the RESIDUAL there.
+
+    Mounts and read paths are re-allowed through ``allowRead``, and the self-test proves the runtime works.
+    """
+    denied: list[str] = []
+    for name in _root_names():
+        path = os.sep + name
+        if path in _SRT_PARTIAL_ROOTS:
+            for child in _child_names(path):
+                real = os.path.realpath(os.path.join(path, child))
+                if (os.path.join(path, child) not in _SRT_KEEP_CHILDREN and not _needed(real, allowed)
+                        and not os.path.isfile(real)):
+                    denied.append(real)
+            continue
+        if path in _SRT_NEVER_DENY:
+            continue
+        real = os.path.realpath(path)
+        if real in _SRT_PARTIAL_ROOTS or real in _SRT_NEVER_DENY or os.path.isfile(real):
+            continue
+        denied.append(real)
+    return denied
+
+
+def _real(path: Path | str) -> str:
+    return os.path.realpath(path)
+
+
+def _unique(items: Sequence[str]) -> list[str]:
+    return list(dict.fromkeys(items))
+
+
+class SrtBackend:
+    """Candidate code under Anthropic Sandbox Runtime (Seatbelt on macOS, bubblewrap on Linux).
+
+    Every process runs as ``<node> <cli> --settings <file> -- <argv>`` with a settings file written 0600 into
+    a private directory outside every mount and removed afterwards. The boundary is the same user as the
+    host, weaker than a container, and ``unprivileged_user`` / ``no_docker_socket`` are reported false rather
+    than claimed. ``probe`` runs a self-test and must succeed before ``capabilities`` or ``run``; any
+    problem raises ``BackendUnavailable`` and nothing here ever runs a task locally instead.
+    """
+
+    name = "os_sandboxed"
+
+    def __init__(self, node: str, cli: str, version: str, egress_allow: tuple[str, ...] = (),
+                 read_paths: tuple[Path, ...] = ()) -> None:
+        self.node = str(node)
+        self.cli = str(cli)
+        self.version = str(version)
+        self.egress_allow = tuple(egress_allow)
+        self.read_paths = tuple(Path(path) for path in read_paths)
+        # The runner interpreter is invoked by its real path: a symlink under a denied tree
+        # (a uv-managed or venv interpreter) could not even be exec'd inside the sandbox.
+        self.python = _real(sys.executable)
+        self._probed = False
+
+    # -- settings ---------------------------------------------------------------
+
+    def settings_for(self, mounts: Mounts, network: bool) -> dict:
+        """The srt settings for one process. Pure: no filesystem writes, no srt."""
+        read_only = [_real(path) for path in mounts.read_only]
+        writable = [_real(path) for path in mounts.writable]
+        interpreter = [_real(sys.base_prefix), _real(sys.prefix)]
+        allow = _unique([*read_only, *writable, *interpreter, *(_real(path) for path in self.read_paths)])
+        # Every ancestor of every mount (up to "/", minus the roots in _SRT_NEVER_DENY) is unreadable: siblings
+        # such as other problems' graders, the pool, the manifest or other trials stay hidden wherever the
+        # experiment lives, not only under the fixed roots. The mounts and read paths are re-allowed below.
+        ancestors = [str(parent) for path in (*read_only, *writable) for parent in Path(path).parents
+                     if str(parent) not in _SRT_NEVER_DENY]
+        return {
+            "network": {
+                "allowedDomains": list(self.egress_allow) if network else [],
+                "deniedDomains": [],
+            },
+            "filesystem": {
+                "denyRead": _unique([*_SRT_DENY_READ, *_top_level_denials(allow), *ancestors]),
+                "allowRead": allow,
+                "allowWrite": _unique(writable),
+                "denyWrite": [],
+            },
+        }
+
+    # -- plumbing ---------------------------------------------------------------
+
+    @staticmethod
+    def _control_env() -> dict[str, str]:
+        return {name: os.environ[name] for name in ("PATH", "LANG", "LC_ALL", "TZ") if name in os.environ}
+
+    def _control(self, argv: list[str], timeout: float, cwd: Path) -> ProcessOutcome:
+        return LocalBackend().run(
+            argv, cwd=cwd, env=self._control_env(),
+            limits=ProcessLimits(timeout_seconds=timeout, max_output_bytes=_CONTROL_OUTPUT_BYTES),
+            mounts=Mounts())
+
+    @staticmethod
+    def _detail(outcome: ProcessOutcome) -> str:
+        text = (outcome.error or outcome.stderr or outcome.stdout or "").strip()
+        return " ".join(text.split())[:300] or f"status {outcome.status.value}"
+
+    def cli_sha256(self) -> str | None:
+        try:
+            return hashlib.sha256(Path(self.cli).read_bytes()).hexdigest()
+        except OSError:
+            return None
+
+    def describe(self) -> dict[str, object]:
+        """What provenance records: the runtime version and the cli file's SHA-256, no environment values."""
+        return {"version": self.version, "cli_sha256": self.cli_sha256(), "node": self.node, "cli": self.cli,
+                "egress_allow": list(self.egress_allow), "read_paths": [str(path) for path in self.read_paths]}
+
+    def command_line(self, settings_file: Path, argv: list[str]) -> list[str]:
+        return [self.node, self.cli, "--settings", str(settings_file), "--", *argv]
+
+    def _write_settings(self, directory: Path, settings: dict) -> Path:
+        path = directory / "settings.json"
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(settings, handle)
+        return path
+
+    # -- capability self-test ---------------------------------------------------
+
+    def _check_installation(self) -> None:
+        for label, value in (("node", self.node), ("srt cli", self.cli)):
+            if not os.path.isabs(value):
+                raise BackendUnavailable(f"{label} must be an absolute path, got {value!r}")
+            if not os.path.isfile(value):
+                raise BackendUnavailable(f"{label} not found at {value}")
+        if not os.access(self.node, os.X_OK):
+            raise BackendUnavailable(f"node at {self.node} is not executable")
+        if sys.platform.startswith("linux"):
+            missing = [tool for tool in _SRT_LINUX_TOOLS if shutil.which(tool) is None]
+            if missing:
+                raise BackendUnavailable(
+                    f"srt on Linux needs bubblewrap, socat and ripgrep; missing: {', '.join(missing)}")
+
+    @staticmethod
+    def _allowed_url(entry: str) -> str:
+        host, _, port = entry.partition(":")
+        if not host or "*" in host:
+            raise BackendUnavailable(
+                f"egress_allow entry {entry!r} cannot be self-tested: it needs a concrete host")
+        return f"https://{host}/" if port in ("", "443") else f"http://{host}:{port}/"
+
+    def probe(self) -> None:
+        """Verify the installation and the isolation properties; raise ``BackendUnavailable`` on any failure."""
+        self._probed = False
+        self._check_installation()
+        with tempfile.TemporaryDirectory(prefix="hw-srt-selftest-") as tmp:
+            probe_root = Path(_real(tmp))
+            version = self._control([self.node, self.cli, "--version"], _SRT_VERSION_TIMEOUT_SECONDS, probe_root)
+            reported = version.stdout.strip()
+            if version.status is not ExecutionStatus.COMPLETED or reported != self.version:
+                raise BackendUnavailable(
+                    f"srt version mismatch: expected {self.version!r}, got "
+                    f"{reported or self._detail(version)!r}")
+            ro, rw = probe_root / "bundle", probe_root / "work"
+            ro.mkdir()
+            rw.mkdir()
+            (ro / "marker.txt").write_text("bundle", encoding="utf-8")
+            canary = probe_root / "canary.txt"
+            canary.write_text("canary", encoding="utf-8")
+            allowed = self._allowed_url(self.egress_allow[0]) if self.egress_allow else ""
+            mounts = Mounts(read_only=(ro,), writable=(rw,))
+            outcome = self._execute(
+                [self.python, "-I", "-c", _SRT_SELF_TEST_SCRIPT, str(ro), str(rw), str(canary),
+                 str(probe_root / "outside.txt"), allowed],
+                cwd=rw, env=self._control_env(),
+                limits=ProcessLimits(timeout_seconds=_SRT_SELF_TEST_TIMEOUT_SECONDS,
+                                     max_output_bytes=_CONTROL_OUTPUT_BYTES),
+                mounts=mounts, network=bool(self.egress_allow))
+        failed = [row.split(None, 1)[1].strip() for row in outcome.stdout.splitlines()
+                  if row.startswith(_SRT_FAIL + " ")]
+        if failed:
+            raise BackendUnavailable(f"sandbox self-test failed: {', '.join(failed)}")
+        if outcome.status is not ExecutionStatus.COMPLETED or _SRT_OK not in outcome.stdout:
+            raise BackendUnavailable(
+                f"sandbox self-test did not complete (exit {outcome.exit_code}): {self._detail(outcome)}")
+        self._probed = True
+
+    def capabilities(self) -> BackendCapabilities:
+        if not self._probed:
+            raise BackendUnavailable("sandbox capabilities are unknown until probe() succeeds")
+        return BackendCapabilities(
+            isolated_filesystem=True, network_denied=not self.egress_allow, unprivileged_user=False,
+            process_containment=True, no_docker_socket=False, read_only_bundle=True, network_allowlist=True)
+
+    # -- execution --------------------------------------------------------------
+
+    def _execute(self, argv: list[str], *, cwd: Path, env: dict[str, str], limits: ProcessLimits,
+                 mounts: Mounts, network: bool) -> ProcessOutcome:
+        # The private directory is short on purpose: srt creates a unix socket under its own TMPDIR, and a
+        # trial's TMPDIR is too long for a socket path (sun_path is about 104 bytes on macOS).
+        short_root = _SRT_SHORT_TMP if os.path.isdir(_SRT_SHORT_TMP) else None
+        try:
+            directory = Path(tempfile.mkdtemp(prefix="hw-srt-", dir=short_root))
+        except OSError as exc:
+            raise BackendUnavailable(f"cannot create the private srt settings directory: {exc}") from exc
+        try:
+            try:
+                directory.chmod(0o700)
+                settings_file = self._write_settings(directory, self.settings_for(mounts, network))
+            except OSError as exc:
+                raise BackendUnavailable(f"cannot write the srt settings file: {exc}") from exc
+            srt_env = dict(env)
+            command = list(argv)
+            if "TMPDIR" in srt_env:
+                # srt's own TMPDIR is the private directory; the sandboxed command still gets the solver's.
+                command = [_ENV_BIN, f"TMPDIR={srt_env['TMPDIR']}", *command]
+            srt_env["TMPDIR"] = str(directory)
+            return LocalBackend().run(
+                self.command_line(settings_file, command), cwd=cwd, env=srt_env, limits=limits, mounts=Mounts())
+        finally:
+            shutil.rmtree(directory, ignore_errors=True)
+
+    def run(self, argv: list[str], *, cwd: Path, env: dict[str, str],
+            limits: ProcessLimits, mounts: Mounts, network: bool = False) -> ProcessOutcome:
+        if not self._probed:
+            raise BackendUnavailable("sandbox backend used before a successful probe()")
+        return self._execute(argv, cwd=cwd, env=env, limits=limits, mounts=mounts, network=network)
+
+
 def require_backend(environment: EnvironmentConfig) -> ExecutionBackend:
     """The backend the manifest asks for, or ``BackendUnavailable``. Never degrades to local."""
     if environment.mode == "trusted_local":
@@ -550,6 +894,17 @@ def require_backend(environment: EnvironmentConfig) -> ExecutionBackend:
         if missing:
             raise BackendUnavailable(f"sandboxed backend lacks required capabilities: {', '.join(missing)}")
         return backend
+    if environment.mode == "os_sandboxed":
+        config = environment.srt
+        if config is None:
+            raise BackendUnavailable("os_sandboxed needs environment.srt {node, cli, version}")
+        srt = SrtBackend(config.node, config.cli, config.version, tuple(environment.egress_allow),
+                         tuple(Path(path) for path in environment.solver_read_paths))
+        srt.probe()
+        missing = srt.capabilities().missing(SRT_REQUIRED)
+        if missing:
+            raise BackendUnavailable(f"os_sandboxed backend lacks required capabilities: {', '.join(missing)}")
+        return srt
     raise BackendUnavailable(f"unknown environment mode {environment.mode!r}")
 
 
