@@ -194,7 +194,10 @@ The opt-in integration tests (`tests/integration/test_srt_backend.py`) run the r
 skipping. They read `HARNESS_SRT_NODE` (absolute path of a real `node`, default the first `node` on `PATH`) and
 `HARNESS_SRT_CLI` (path of `dist/cli.js`, with a default under `~/.local/share/harness-tools`), and optionally
 `HARNESS_SRT_VERSION` (default `0.0.81`) and `HARNESS_SRT_EGRESS` (default `ai-gateway.vercel.sh:443`). The
-`isolation` CI job installs bubblewrap, `socat`, ripgrep and runtime 0.0.81 and runs them on Linux.
+`isolation` CI job installs bubblewrap, `socat`, ripgrep, `apparmor-profiles` and runtime 0.0.81, sets
+`kernel.apparmor_restrict_unprivileged_userns=0` and `kernel.unprivileged_userns_clone=1` (the setup of the runtime's
+own CI, so bubblewrap and the seccomp helper can nest user namespaces on Ubuntu 24.04), fails at an unguarded `bwrap`
+sanity step if the host still cannot, and then runs the tests on Linux.
 
 ### `parallelism`
 

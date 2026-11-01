@@ -86,10 +86,17 @@ jobs:
       - name: Install the Anthropic Sandbox Runtime and its Linux tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y bubblewrap socat ripgrep
-          # ubuntu-latest (24.04) restricts unprivileged user namespaces through AppArmor, and bubblewrap needs them.
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          # Same setup as the Anthropic Sandbox Runtime's own CI (integration-tests.yml), minus the packages that
+          # only rebuild the seccomp helper (we use the packaged one).
+          sudo apt-get install -y bubblewrap socat ripgrep apparmor-profiles
+          # ubuntu-latest (24.04) sets kernel.apparmor_restrict_unprivileged_userns=1, which allows
+          # unshare(CLONE_NEWUSER) but grants the new namespace no capabilities, so bwrap and apply-seccomp cannot
+          # nest namespaces. Disable it; the second sysctl only exists on some kernels.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
           npm install --prefix "$RUNNER_TEMP/srt" @anthropic-ai/sandbox-runtime@0.0.81
+      - name: Check that this host can nest user namespaces (unguarded on purpose)
+        run: bwrap --unshare-pid --unshare-user --cap-drop ALL --ro-bind / / --proc /proc true
       - name: Run the srt backend tests (a skip fails the job; no API key is used)
         env:
           HARNESS_SRT_TESTS: "1"
