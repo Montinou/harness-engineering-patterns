@@ -63,8 +63,8 @@ run 39721848274. Neither a green suite nor a synthetic smoke test validates
 real-model performance improvements or production security boundaries.
 
 The package declares Python >=3.10, but the workflow at that commit only tested
-3.12. The current workflow file defines a 3.10/3.12/3.13 matrix, but until a run
-of it exists, do not present 3.10/3.13 support as CI-verified on this branch.
+3.12. The current workflow's 3.10/3.12/3.13 matrix has since run: see
+[CI evidence for the current work](#ci-evidence-for-the-current-work).
 
 ## Implementation boundaries checked against source
 
@@ -105,7 +105,8 @@ Checked against the code at 80134da:
 - Empirical improvements on Claude Code, Codex, OpenCode or other real agents;
   every result in this repository is synthetic.
 - External service/data isolation and adversarial command security. The Docker
-  sandbox has not been exercised on the author's machine, and CI has not run.
+  sandbox tests pass in CI (`isolation` job) but have not been exercised on the author's machine; they cover
+  the backend's capability self-test, not adversarial attacks.
 - **An `oracle` check's verdict can be forged** by candidate code that runs in the
   grader process and writes the observation late (for example from an `atexit`
   hook), because the result directory is writable by the grader and `sandboxed`
