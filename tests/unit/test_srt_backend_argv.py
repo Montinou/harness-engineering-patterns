@@ -6,13 +6,16 @@ the real sandbox enforces (``tests/integration/test_srt_backend.py`` does, with 
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
+import shutil
 import stat
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from harness_workbench.core.harness import ALL_COMPONENTS
 from harness_workbench.experiments.backends import (
@@ -75,8 +78,29 @@ def calls(log: Path) -> list[dict]:
     return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()] if log.exists() else []
 
 
+LINUX_TOOLS = ("bwrap", "socat", "rg")
+
+
+def with_linux_tools(present: bool):
+    """Patch ``shutil.which`` so bubblewrap, socat and ripgrep are all there (or all missing), whatever host
+    the tests run on. The fake ``node`` stands in for srt, so the tools are never run."""
+    real = shutil.which
+
+    def which(cmd, *args, **kwargs):
+        if cmd in LINUX_TOOLS:
+            return "/usr/bin/" + cmd if present else None
+        return real(cmd, *args, **kwargs)
+
+    return mock.patch.object(shutil, "which", which)
+
+
 class SrtCase(unittest.TestCase):
     def setUp(self) -> None:
+        # These tests exercise the backend's behavior, not the host: a Linux runner without bubblewrap must not
+        # fail them before the behavior under test (the real check has its own test below).
+        patcher = with_linux_tools(True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.root = Path(os.path.realpath(tmp.name))
@@ -196,6 +220,22 @@ class SettingsTests(SrtCase):
         allow = settings["filesystem"]["allowRead"]
         for path in (self.bundle, self.work, Path(sys.base_prefix).resolve(), extra):
             self.assertIn(str(path), allow)
+
+    def test_allow_read_covers_the_srt_seccomp_helper_directory(self) -> None:
+        # On Linux srt runs its apply-seccomp helper inside the bubblewrap namespace, where the denied /home
+        # (or wherever srt is installed) would hide it; the directory is read-only and on every platform.
+        package = self.root / "node_modules" / "@anthropic-ai" / "sandbox-runtime"
+        (package / "dist").mkdir(parents=True)
+        (package / "vendor" / "seccomp" / "x64").mkdir(parents=True)
+        cli = package / "dist" / "cli.js"
+        cli.write_text("// fake srt cli\n", encoding="utf-8")
+        settings = self.backend(cli=str(cli)).settings_for(self.mounts, network=True)["filesystem"]
+        self.assertIn(str(package / "vendor" / "seccomp"), settings["allowRead"])
+        self.assertNotIn(str(package / "vendor" / "seccomp"), settings["allowWrite"])
+
+    def test_allow_read_skips_a_seccomp_directory_the_package_does_not_have(self) -> None:
+        settings = self.backend().settings_for(self.mounts, network=True)["filesystem"]
+        self.assertFalse([path for path in settings["allowRead"] if path.endswith("seccomp")])
 
     def test_allow_write_is_writable_mounts_only(self) -> None:
         settings = self.backend().settings_for(self.mounts, network=True)
@@ -331,6 +371,21 @@ class RunTests(SrtCase):
 
 
 class UnavailableTests(SrtCase):
+    def test_linux_without_its_tools_is_backend_unavailable(self) -> None:
+        # The real installation check, on a simulated Linux host: it names every missing tool, and with the
+        # tools present the same backend passes.
+        with mock.patch.object(sys, "platform", "linux"), with_linux_tools(False):
+            with self.assertRaises(BackendUnavailable) as caught:
+                self.backend()._check_installation()
+        for tool in LINUX_TOOLS:
+            self.assertIn(tool, str(caught.exception))
+        with mock.patch.object(sys, "platform", "linux"), with_linux_tools(True):
+            self.backend()._check_installation()
+
+    def test_macos_does_not_need_the_linux_tools(self) -> None:
+        with mock.patch.object(sys, "platform", "darwin"), with_linux_tools(False):
+            self.backend()._check_installation()
+
     def test_missing_node_or_cli_is_backend_unavailable(self) -> None:
         with self.assertRaises(BackendUnavailable):
             self.backend(node=str(self.root / "no-node")).probe()
@@ -466,10 +521,23 @@ class IsolationRequiredForClaudeCodeTests(unittest.TestCase):
 
     def test_claude_code_agent_runs_on_an_isolating_backend(self) -> None:
         argv = ["{python}", "-I", CLAUDE_CODE_AGENT_PLACEHOLDER]
-        for capabilities in (SRT_REQUIRED, SANDBOX_REQUIRED):
+        spy = self.Spy(SRT_REQUIRED)  # an allowlist that is not empty: network_denied is False
+        self.execute(spy, argv)
+        self.assertTrue(spy.ran)
+
+    def test_claude_code_agent_needs_a_reachable_model(self) -> None:
+        # The agent talks to its model over the network. Docker's --network none (SANDBOX_REQUIRED) and an
+        # os_sandboxed backend with an empty egress list isolate, but the agent could never reach the Gateway.
+        argv = ["{python}", "-I", CLAUDE_CODE_AGENT_PLACEHOLDER]
+        empty_allowlist = dataclasses.replace(SRT_REQUIRED, network_denied=True)
+        for capabilities in (SANDBOX_REQUIRED, empty_allowlist):
             spy = self.Spy(capabilities)
-            self.execute(spy, argv)
-            self.assertTrue(spy.ran)
+            result = self.execute(spy, argv)
+            self.assertFalse(spy.ran, "the command must not start")
+            self.assertEqual(result.status, ExecutionStatus.EXECUTION_ERROR)
+            self.assertFalse(result.retryable)
+            self.assertIn("egress", result.error)
+            self.assertNotIn("or sandboxed", result.error)
 
     def test_other_commands_still_run_without_isolation(self) -> None:
         from harness_workbench.experiments.backends import NO_GUARANTEES

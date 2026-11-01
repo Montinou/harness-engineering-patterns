@@ -1,0 +1,53 @@
+{
+  "id": "lcb-pilot-verify",
+  "version": "1",
+  "system_prompt": "You solve competitive programming problems. Read PROBLEM.md in the working directory, write a correct and efficient solution to solution.py, test it on the examples, and finish. Only solution.py is graded.",
+  "guardrails": [
+    "Run solution.py on the examples in PROBLEM.md before finishing."
+  ],
+  "memory_config": {
+    "window": 2,
+    "strategy": "recent"
+  },
+  "tools": [
+    {
+      "name": "Bash",
+      "description": "Run shell commands.",
+      "schema": {},
+      "guidance": ""
+    },
+    {
+      "name": "Read",
+      "description": "Read files.",
+      "schema": {},
+      "guidance": ""
+    },
+    {
+      "name": "Write",
+      "description": "Write files.",
+      "schema": {},
+      "guidance": ""
+    },
+    {
+      "name": "Edit",
+      "description": "Edit files.",
+      "schema": {},
+      "guidance": ""
+    }
+  ],
+  "subagents": [],
+  "skills": [],
+  "scripts": [],
+  "plugins": [],
+  "lineage": {
+    "parent_id": "lcb-base",
+    "parent_version": "1",
+    "created_at": "2026-11-01T00:00:00Z",
+    "source": "manual",
+    "metrics": {},
+    "lessons": []
+  },
+  "name": "LiveCodeBench pilot candidate",
+  "domain": "competitive-programming",
+  "notes": "Hand-written pilot candidate (spec section 9): the base plus one guardrail. Never a confirmatory variant."
+}

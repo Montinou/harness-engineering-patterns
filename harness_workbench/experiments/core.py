@@ -448,25 +448,18 @@ class _Runner:
                     pooled: bool = True) -> list[TrialRecord]:
         """Run one trial, retries included, and return its attempts in order.
 
-        Pooled (a pool thread runs it) it never touches the database, and an exception that escapes
-        ``run_trial`` is that trial's failure (an unevaluated ``EXECUTION_ERROR`` attempt, not retried): it
-        must not stop the other trials. Inline (``pooled=False``, the main thread at parallelism 1) it is
-        today's behavior: each attempt is written as it finishes and an escaping exception aborts the run.
+        Pooled (a pool thread runs it) it never touches the database; inline (``pooled=False``, the main thread
+        at parallelism 1) each attempt is written as it finishes. Either way an exception that escapes
+        ``run_trial`` is not a trial result: it propagates (through the future, to ``grid`` on the main thread
+        when pooled) and aborts the run, so results never depend on parallelism.
         """
         records: list[TrialRecord] = []
         for attempt in range(1, self.spec.statistics.max_attempts + 1):
-            try:
-                record = run_trial(
-                    self.spec, variant, task, repetition=repetition, attempt=attempt, executor=self.executor,
-                    backend=self.backend, limits=self.limits, experiment_id=self.experiment_id,
-                    implementation_hash=self.implementation_hash,
-                )
-            except Exception as exc:  # BaseException (an interrupt) still propagates
-                if not pooled:
-                    raise
-                records.append(_crashed_trial(self.spec, variant, task, repetition, attempt,
-                                              self.implementation_hash, exc))
-                break
+            record = run_trial(
+                self.spec, variant, task, repetition=repetition, attempt=attempt, executor=self.executor,
+                backend=self.backend, limits=self.limits, experiment_id=self.experiment_id,
+                implementation_hash=self.implementation_hash,
+            )
             records.append(record)
             if not pooled:
                 self._write(record)
@@ -514,19 +507,6 @@ class _Runner:
         key = lambda record: (position[(record.task_id, record.repetition, record.variant_id)], record.attempt)  # noqa: E731
         self.final[first_final:] = sorted(self.final[first_final:], key=key)
         self.attempts[first_attempt:] = sorted(self.attempts[first_attempt:], key=key)
-
-
-def _crashed_trial(spec: ExperimentSpec, variant: Variant, task: TaskSpec, repetition: int, attempt: int,
-                   implementation_hash: str, exc: Exception) -> TrialRecord:
-    """The record of a trial whose ``run_trial`` raised: an execution error that was never evaluated."""
-    trial_id = uuid.uuid4().hex
-    execution = _failed_execution(trial_id, ExecutionStatus.EXECUTION_ERROR,
-                                  f"trial raised {type(exc).__name__}: {exc}")
-    return TrialRecord(
-        trial_id, variant.id, task.id, task.split.value if task.split else "unsplit", task.family,
-        repetition, spec.seed + repetition, attempt, execution,
-        _not_evaluated(trial_id, task, ExecutionStatus.EXECUTION_ERROR), implementation_hash,
-    )
 
 
 def _guard_eligible(decision: ExperimentDecision, *, spec: ExperimentSpec, selection: FrozenSelection | None,

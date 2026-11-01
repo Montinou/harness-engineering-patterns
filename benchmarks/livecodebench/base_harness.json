@@ -1,0 +1,51 @@
+{
+  "id": "lcb-base",
+  "version": "1",
+  "system_prompt": "You solve competitive programming problems. Read PROBLEM.md in the working directory, write a correct and efficient solution to solution.py, test it on the examples, and finish. Only solution.py is graded.",
+  "guardrails": [],
+  "memory_config": {
+    "window": 2,
+    "strategy": "recent"
+  },
+  "tools": [
+    {
+      "name": "Bash",
+      "description": "Run shell commands.",
+      "schema": {},
+      "guidance": ""
+    },
+    {
+      "name": "Read",
+      "description": "Read files.",
+      "schema": {},
+      "guidance": ""
+    },
+    {
+      "name": "Write",
+      "description": "Write files.",
+      "schema": {},
+      "guidance": ""
+    },
+    {
+      "name": "Edit",
+      "description": "Edit files.",
+      "schema": {},
+      "guidance": ""
+    }
+  ],
+  "subagents": [],
+  "skills": [],
+  "scripts": [],
+  "plugins": [],
+  "lineage": {
+    "parent_id": null,
+    "parent_version": null,
+    "created_at": "2026-11-01T00:00:00Z",
+    "source": "seed",
+    "metrics": {},
+    "lessons": []
+  },
+  "name": "LiveCodeBench base",
+  "domain": "competitive-programming",
+  "notes": "Base harness of the real-model LiveCodeBench experiment (spec section 8). Must stay equivalent to make_controls.BASE_HARNESS."
+}

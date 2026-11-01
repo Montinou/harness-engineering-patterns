@@ -216,29 +216,33 @@ class MainThreadWritesTests(ParallelCase):
 
 
 class WorkerFailureTests(ParallelCase):
-    def test_worker_exception_recorded_as_that_trial(self) -> None:
+    def test_worker_exception_propagates_like_inline(self) -> None:
+        # Results must not depend on parallelism (spec 7a): an exception escaping run_trial aborts the run at
+        # every parallelism, after the trials that already finished were recorded.
         real = core.run_trial
 
-        def run_trial(spec, variant, task, **kwargs):
-            if task.id == "t2" and kwargs["repetition"] == 1 and variant.id == "cand":
-                raise RuntimeError("worker blew up")
-            return real(spec, variant, task, **kwargs)
+        for parallelism in (2, 4):
+            db = RecordingDB()
 
-        for parallelism in (2, 4):  # pooled; parallelism 1 propagates, see the next test
+            def run_trial(spec, variant, task, **kwargs):
+                if task.id == "t2" and kwargs["repetition"] == 1 and variant.id == "cand":
+                    deadline = time.monotonic() + 10
+                    while not db.writes and time.monotonic() < deadline:
+                        time.sleep(0.005)  # let a finished trial reach the main thread first
+                    raise RuntimeError("worker blew up")
+                return real(spec, variant, task, **kwargs)
+
             with self.subTest(parallelism=parallelism), mock.patch.object(core, "run_trial", run_trial):
                 spec = self.spec(parallelism, name=f"x{parallelism}")
-                db = RecordingDB()
                 runner = self.runner(spec, FakeExecutor(), db)
-                runner.grid(list(spec.variants), spec.tasks)  # does not stop the others
-                self.assertEqual(len(runner.final), len(TASKS) * REPETITIONS * len(spec.variants))
-                failed = [r for r in runner.final if r.execution.status is ExecutionStatus.EXECUTION_ERROR]
-                self.assertEqual([(r.task_id, r.repetition, r.variant_id) for r in failed], [("t2", 1, "cand")])
-                self.assertIn("RuntimeError: worker blew up", failed[0].execution.error)
-                self.assertFalse(failed[0].usable)
-                self.assertIsNone(failed[0].objective_score)
+                with self.assertRaisesRegex(RuntimeError, "worker blew up"):
+                    runner.grid(list(spec.variants), spec.tasks)
                 self.assertEqual(db.off_main, [])
-                self.assertIn(("t2", "cand", 1, 1), db.writes)  # persisted like any other trial
-                self.assertEqual(sum(r.usable for r in runner.final), len(runner.final) - 1)
+                self.assertGreater(len(db.writes), 0)  # finished trials were recorded
+                self.assertNotIn(("t2", "cand", 1, 1), db.writes)  # the failed one is not invented as a trial
+                self.assertEqual(len(runner.final), len(db.writes))
+                self.assertFalse(any(r.execution.error and "trial raised" in r.execution.error
+                                     for r in runner.final))
 
     def test_inline_exception_propagates_at_parallelism_1(self) -> None:
         # With 1 the behavior is today's: an exception escaping run_trial aborts the run.

@@ -44,7 +44,8 @@ and the network are confined.
    containment, a read-only bundle and network that is denied or limited to an allowlist. `unprivileged_user` is
    reported **false** (the sandbox runs as the same uid) and `no_docker_socket` is false (no Docker is involved).
    `validate_confirmatory` accepts `os_sandboxed` wherever it requires `sandboxed` for candidate code, and the
-   `{claude_code_agent}` placeholder is refused unless the backend satisfies `SRT_REQUIRED` or `SANDBOX_REQUIRED`.
+   `{claude_code_agent}` placeholder is refused unless the backend satisfies `SRT_REQUIRED` with a non-empty egress allowlist (the agent must reach its
+   model: `sandboxed`, which runs with `--network none`, is refused).
    Provenance records the runtime version and the SHA-256 of the runtime's `cli.js`.
 
 ## Consequences
