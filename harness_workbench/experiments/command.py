@@ -40,6 +40,9 @@ __all__ = ["CommandHarnessExecutor"]
 
 # The synthetic example agent. It is a script, not an importable module: importing it would run it.
 DEMO_AGENT = Path(__file__).resolve().with_name("demo_agent.py")
+# The Claude Code adapter: also a script, mounted read-only only for commands that name it.
+CLAUDE_CODE_AGENT = Path(__file__).resolve().with_name("claude_code_agent.py")
+CLAUDE_CODE_AGENT_PLACEHOLDER = "{claude_code_agent}"
 
 TAIL_CHARS = 2000
 MAX_REPORTED = 10**12  # upper bound for adapter-reported tokens and latency_ms
@@ -202,7 +205,8 @@ class CommandHarnessExecutor:
             "workspace": str(workspace), "harness_json": str(harness_file), "task_json": str(task_file),
             "prompt_file": str(prompt_file), "result_json": str(result_file), "task": request.task_description,
             "prompt": prompt, "seed": str(request.seed),
-            "python": backend.python, "demo_agent": str(DEMO_AGENT), "trial_id": request.trial_id,
+            "python": backend.python, "demo_agent": str(DEMO_AGENT), "claude_code_agent": str(CLAUDE_CODE_AGENT),
+            "trial_id": request.trial_id,
         }
         args = [_expand(argument, values) for argument in self.argv]
         env = minimal_env(home=home, tmp=tmp, passthrough=self.env_passthrough)
@@ -210,14 +214,19 @@ class CommandHarnessExecutor:
             "HARNESS_WORKSPACE": str(workspace), "HARNESS_SPEC_FILE": str(harness_file),
             "HARNESS_TASK_FILE": str(task_file), "HARNESS_RESULT_FILE": str(result_file),
             "HARNESS_SEED": str(request.seed), "HARNESS_TRIAL_ID": request.trial_id,
+            # Lets an adapter stop its own child before the supervisor has to kill the whole trial.
+            "HARNESS_TIMEOUT_SECONDS": str(limits.timeout_seconds),
         })
-        mounts = Mounts(read_only=(DEMO_AGENT,), writable=(workspace, control, home, tmp))
+        uses_claude_code_agent = any(CLAUDE_CODE_AGENT_PLACEHOLDER in argument for argument in self.argv)
+        mounts = Mounts(read_only=(DEMO_AGENT, CLAUDE_CODE_AGENT) if uses_claude_code_agent else (DEMO_AGENT,),
+                        writable=(workspace, control, home, tmp))
         outcome = backend.run(args, cwd=workspace, env=env, limits=limits, mounts=mounts)
-        return self._result(request, outcome, result_file, limits)
+        return self._result(request, outcome, result_file, limits, nonzero_exit_is_error=uses_claude_code_agent)
 
     @staticmethod
     def _result(request: PublicTrialRequest, outcome: ProcessOutcome, result_file: Path,
-                limits: ProcessLimits) -> tuple[ExecutionResult, dict[str, Any]]:
+                limits: ProcessLimits, *, nonzero_exit_is_error: bool = False,
+                ) -> tuple[ExecutionResult, dict[str, Any]]:
         common: dict[str, Any] = {
             "trial_id": request.trial_id,
             "exit_code": outcome.exit_code,
@@ -233,6 +242,13 @@ class CommandHarnessExecutor:
             # a result file written by a killed process is not trusted.
             return ExecutionResult(status=outcome.status, outputs={}, error=outcome.error,
                                    retryable=outcome.retryable, **common, **no_usage), {}
+        if nonzero_exit_is_error and outcome.status is ExecutionStatus.TASK_FAILURE:
+            # The Claude Code adapter exits 0 for every outcome that is the candidate's (it writes the
+            # result file first) and 3 for anything that is not: that must fail loudly, not be scored.
+            return ExecutionResult(
+                status=ExecutionStatus.EXECUTION_ERROR, outputs={},
+                error=f"adapter exited with code {outcome.exit_code} without a result", retryable=False,
+                **common, **no_usage), {}
         try:
             data = _read_result(result_file, limits.max_output_bytes)
         except _ProtocolError as exc:
